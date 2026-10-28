@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Turns dist/Grabwave (PyInstaller folder) into one double-clickable dist/Grabwave-<version>-x86_64.AppImage.
+# Turns dist/Grabwave (PyInstaller folder) into one double-clickable dist/Grabwave-x86_64.AppImage.
 set -e
 cd "$(dirname "$0")/../.."
 VER=$(python3 -c "import re;print(re.search(r'VERSION = .([0-9.]+)', open('app.py').read()).group(1))")
@@ -30,5 +30,5 @@ if [ ! -f "$TOOL" ]; then
   curl -L -o "$TOOL" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
   chmod +x "$TOOL"
 fi
-ARCH=x86_64 "$TOOL" --appimage-extract-and-run "$APPDIR" "dist/Grabwave-$VER-x86_64.AppImage"
-echo "Done: dist/Grabwave-$VER-x86_64.AppImage"
+ARCH=x86_64 "$TOOL" --appimage-extract-and-run "$APPDIR" "dist/Grabwave-x86_64.AppImage"
+echo "Done: dist/Grabwave-x86_64.AppImage"

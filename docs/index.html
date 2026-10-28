@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grabwave: download videos and record live streams</title>
+<meta name="description" content="Grabwave downloads videos and records live streams, up to 20 at a time, from a simple built-in browser.">
+<link rel="icon" href="grabwave.png">
+<style>
+  :root {
+    --bg: #ffffff; --ink: #17151f; --muted: #5d5a6b; --line: #e7e4f1; --card: #f6f4fc;
+    --accent: #5b3df5; --accent-ink: #ffffff; --accent-soft: #ece8ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15131c; --ink: #f2f0fa; --muted: #a8a4ba; --line: #2b2837; --card: #1e1b29; --accent: #8a72ff; --accent-ink: #12101a; --accent-soft: #2a2542; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
+  header { padding: 22px 0; }
+  .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 20px; }
+  .brand img { width: 36px; height: 36px; border-radius: 9px; }
+  .hero { text-align: center; padding: 56px 0 40px; }
+  .hero img.big { width: 104px; height: 104px; border-radius: 24px; box-shadow: 0 10px 30px rgba(91,61,245,.28); }
+  h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.15; margin: 24px 0 14px; letter-spacing: -.02em; }
+  .lead { color: var(--muted); font-size: 18px; max-width: 600px; margin: 0 auto 30px; }
+  .btn { display: inline-block; background: var(--accent); color: var(--accent-ink); text-decoration: none; font-weight: 650; font-size: 18px; padding: 15px 30px; border-radius: 12px; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .sub { color: var(--muted); font-size: 14px; margin-top: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin: 20px 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .card.you { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .card h3 { margin: 0 0 4px; font-size: 19px; }
+  .card .file { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .card a.dl { display: inline-block; background: var(--accent-soft); color: var(--accent); text-decoration: none; font-weight: 650; padding: 9px 16px; border-radius: 9px; margin-bottom: 16px; }
+  .card ol { margin: 0; padding-left: 20px; color: var(--muted); font-size: 15px; }
+  .card li { margin-bottom: 6px; }
+  h2 { font-size: 26px; margin: 56px 0 8px; letter-spacing: -.01em; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 22px; margin-top: 18px; }
+  .features h4 { margin: 0 0 4px; font-size: 17px; }
+  .features p { margin: 0; color: var(--muted); font-size: 15px; }
+  .note { background: var(--accent-soft); border-radius: 14px; padding: 18px 20px; margin-top: 28px; font-size: 15px; }
+  footer { border-top: 1px solid var(--line); margin-top: 64px; padding: 26px 0 40px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="brand"><img src="grabwave.png" alt=""> Grabwave</div></header>
+
+  <section class="hero">
+    <img class="big" src="grabwave.png" alt="Grabwave icon">
+    <h1>Save videos. Record live streams.</h1>
+    <p class="lead">Grabwave downloads videos and records live streams, up to 20 at a time, from a simple built-in browser.</p>
+    <a id="main-btn" class="btn" href="#downloads">Download</a>
+    <div id="main-sub" class="sub">Free for Windows, macOS and Linux</div>
+  </section>
+
+  <section id="downloads">
+    <h2>Download</h2>
+    <div class="grid">
+      <div class="card" data-os="windows">
+        <h3>Windows</h3>
+        <div class="file">Windows 10 or 11 · installer (.exe)</div>
+        <a class="dl" href="https://github.com/unknownleaves/grabwave/releases/latest/download/Grabwave-Setup.exe">Download for Windows</a>
+        <ol>
+          <li>Open the file you downloaded.</li>
+          <li>If Windows shows "protected your PC", click <b>More info</b>, then <b>Run anyway</b>.</li>
+          <li>Follow the steps, then click <b>Finish</b>. Grabwave opens.</li>
+        </ol>
+      </div>
+      <div class="card" data-os="mac">
+        <h3>macOS</h3>
+        <div class="file">Apple Silicon Macs · disk image (.dmg)</div>
+        <a class="dl" href="https://github.com/unknownleaves/grabwave/releases/latest/download/Grabwave.dmg">Download for Mac</a>
+        <ol>
+          <li>Open the downloaded file.</li>
+          <li>Drag <b>Grabwave</b> onto <b>Applications</b>.</li>
+          <li>First time only: right-click Grabwave in Applications and choose <b>Open</b>.</li>
+        </ol>
+      </div>
+      <div class="card" data-os="linux">
+        <h3>Linux</h3>
+        <div class="file">64-bit · single file (.AppImage)</div>
+        <a class="dl" href="https://github.com/unknownleaves/grabwave/releases/latest/download/Grabwave-x86_64.AppImage">Download for Linux</a>
+        <ol>
+          <li>Right-click the file, open <b>Properties</b>, and allow it to run as a program.</li>
+          <li>Double-click it. Nothing else to install.</li>
+        </ol>
+      </div>
+    </div>
+    <div class="note">Grabwave is not yet signed with a paid developer certificate, so Windows and macOS show a one-time warning the first time you open it. The steps above get you past it.</div>
+  </section>
+
+  <section>
+    <h2>What it does</h2>
+    <div class="features">
+      <div><h4>Built-in browser</h4><p>Browse a site, then click the Download button that appears on the video.</p></div>
+      <div><h4>Live recording</h4><p>Record live streams. Grabwave waits for a stream to start and saves it as it plays.</p></div>
+      <div><h4>Up to 20 at once</h4><p>Queue as many as you like. Twenty download or record at the same time.</p></div>
+      <div><h4>Stays up to date</h4><p>One click in Settings refreshes the download engine when a site changes.</p></div>
+    </div>
+  </section>
+
+  <footer>Grabwave only saves content you have the right to save. Respect each site's terms and local laws.</footer>
+</div>
+
+<script>
+  // Pick the visitor's system, put its button at the top and highlight its card.
+  (function () {
+    var ua = navigator.userAgent || "", p = (navigator.platform || "").toLowerCase();
+    var os = /Windows/i.test(ua) ? "windows" : /Mac/i.test(ua) || p.indexOf("mac") === 0 ? "mac" : /Linux|X11/i.test(ua) && !/Android/i.test(ua) ? "linux" : null;
+    if (/iPhone|iPad|Android/i.test(ua)) os = null;
+    var names = { windows: "Windows", mac: "Mac", linux: "Linux" };
+    var cards = document.querySelectorAll(".card");
+    if (!os) { document.getElementById("main-sub").textContent = "Pick your system below. Grabwave runs on computers, not phones."; return; }
+    cards.forEach(function (c) {
+      if (c.getAttribute("data-os") === os) {
+        c.classList.add("you");
+        document.getElementById("main-btn").href = c.querySelector("a.dl").href;
+        document.getElementById("main-btn").textContent = "Download for " + names[os];
+        document.getElementById("main-sub").textContent = "Free · " + c.querySelector(".file").textContent;
+      }
+    });
+  })();
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Turns dist/Grabwave.app into dist/Grabwave-<version>.dmg (drag-to-Applications disk image).
+# Turns dist/Grabwave.app into dist/Grabwave.dmg (drag-to-Applications disk image).
 set -e
 cd "$(dirname "$0")/../.."
 VER=$(python3 -c "import re;print(re.search(r'VERSION = .([0-9.]+)', open('app.py').read()).group(1))")
@@ -14,5 +14,5 @@ STAGE=dist/dmg_stage
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "Grabwave" -srcfolder "$STAGE" -ov -format UDZO "dist/Grabwave-$VER.dmg"
-echo "Done: dist/Grabwave-$VER.dmg"
+hdiutil create -volname "Grabwave" -srcfolder "$STAGE" -ov -format UDZO "dist/Grabwave.dmg"
+echo "Done: dist/Grabwave.dmg"
