@@ -1,10 +1,9 @@
 name: build installers
-# Builds Grabwave-Setup-x.y.exe (Windows), Grabwave-x.y.dmg (macOS) and Grabwave-x.y-x86_64.AppImage (Linux).
-# Run it from the Actions tab ("Run workflow"), or push a tag like v1.6 to also publish them as a Release.
+# Builds Grabwave-Setup.exe (Windows), Grabwave.dmg (macOS) and Grabwave-x86_64.AppImage (Linux),
+# then publishes them on the repository's Releases page as plain downloads (no zip).
+# Run it from the Actions tab: "Run workflow".
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 permissions:
   contents: write
 jobs:
@@ -28,10 +27,7 @@ jobs:
           $v = [regex]::Match((Get-Content app.py -Raw), 'VERSION = .([0-9.]+)').Groups[1].Value
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" installer\Grabwave.iss
       - uses: actions/upload-artifact@v4
-        with: { name: Grabwave-Windows-exe, path: dist/Grabwave-Setup-*.exe }
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with: { files: dist/Grabwave-Setup-*.exe }
+        with: { name: Grabwave-Windows-exe, path: dist/Grabwave-Setup.exe }
   macos:
     runs-on: macos-latest   # Apple Silicon
     steps:
@@ -46,10 +42,7 @@ jobs:
       - run: pyinstaller --noconfirm --clean Grabwave.spec
       - run: bash packaging/mac/make_dmg.sh
       - uses: actions/upload-artifact@v4
-        with: { name: Grabwave-macOS-dmg, path: dist/Grabwave-*.dmg }
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with: { files: dist/Grabwave-*.dmg }
+        with: { name: Grabwave-macOS-dmg, path: dist/Grabwave.dmg }
   linux:
     runs-on: ubuntu-22.04
     steps:
@@ -64,7 +57,23 @@ jobs:
             libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 libfuse2
       - run: bash build_linux.sh
       - uses: actions/upload-artifact@v4
-        with: { name: Grabwave-Linux-AppImage, path: dist/Grabwave-*.AppImage }
+        with: { name: Grabwave-Linux-AppImage, path: dist/Grabwave-x86_64.AppImage }
+  release:
+    # Publishes whatever built successfully as a Release (a normal download page, no zip files).
+    needs: [windows, macos, linux]
+    if: ${{ !cancelled() && (needs.windows.result == 'success' || needs.macos.result == 'success' || needs.linux.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        run: echo "VER=$(grep -oP 'VERSION = "\K[0-9.]+' app.py)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          pattern: Grabwave-*
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with: { files: dist/Grabwave-*.AppImage }
+        with:
+          tag_name: v${{ env.VER }}
+          name: Grabwave ${{ env.VER }}
+          files: out/*
