@@ -9,4 +9,4 @@ pip install -r requirements.txt imageio-ffmpeg
 mkdir -p ffmpeg
 [ -f ffmpeg/ffmpeg ] || python3 -c "import shutil,imageio_ffmpeg;shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(),'ffmpeg/ffmpeg')"
 pyinstaller --noconfirm --clean Grabwave.spec
-packaging/linux/make_appimage.sh
+bash packaging/linux/make_appimage.sh
