@@ -44,7 +44,7 @@ jobs:
           mkdir -p ffmpeg
           python -c "import shutil,imageio_ffmpeg;shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(),'ffmpeg/ffmpeg')"
       - run: pyinstaller --noconfirm --clean Grabwave.spec
-      - run: packaging/mac/make_dmg.sh
+      - run: bash packaging/mac/make_dmg.sh
       - uses: actions/upload-artifact@v4
         with: { name: Grabwave-macOS-dmg, path: dist/Grabwave-*.dmg }
       - uses: softprops/action-gh-release@v2
@@ -62,7 +62,7 @@ jobs:
           sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libnss3 \
             libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 libfuse2
-      - run: ./build_linux.sh
+      - run: bash build_linux.sh
       - uses: actions/upload-artifact@v4
         with: { name: Grabwave-Linux-AppImage, path: dist/Grabwave-*.AppImage }
       - uses: softprops/action-gh-release@v2
