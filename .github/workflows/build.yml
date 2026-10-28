@@ -1,0 +1,70 @@
+name: build installers
+# Builds Grabwave-Setup-x.y.exe (Windows), Grabwave-x.y.dmg (macOS) and Grabwave-x.y-x86_64.AppImage (Linux).
+# Run it from the Actions tab ("Run workflow"), or push a tag like v1.6 to also publish them as a Release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt imageio-ffmpeg
+      - name: Get ffmpeg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ffmpeg | Out-Null
+          python -c "import shutil,imageio_ffmpeg;shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(),'ffmpeg/ffmpeg.exe')"
+      - run: pyinstaller --noconfirm --clean Grabwave.spec
+      - name: Build installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $v = [regex]::Match((Get-Content app.py -Raw), 'VERSION = .([0-9.]+)').Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" installer\Grabwave.iss
+      - uses: actions/upload-artifact@v4
+        with: { name: Grabwave-Windows-exe, path: dist/Grabwave-Setup-*.exe }
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with: { files: dist/Grabwave-Setup-*.exe }
+  macos:
+    runs-on: macos-latest   # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt imageio-ffmpeg
+      - name: Get ffmpeg
+        run: |
+          mkdir -p ffmpeg
+          python -c "import shutil,imageio_ffmpeg;shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(),'ffmpeg/ffmpeg')"
+      - run: pyinstaller --noconfirm --clean Grabwave.spec
+      - run: packaging/mac/make_dmg.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: Grabwave-macOS-dmg, path: dist/Grabwave-*.dmg }
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with: { files: dist/Grabwave-*.dmg }
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: System libraries for Qt WebEngine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libnss3 \
+            libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 libfuse2
+      - run: ./build_linux.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: Grabwave-Linux-AppImage, path: dist/Grabwave-*.AppImage }
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with: { files: dist/Grabwave-*.AppImage }
