@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt
 
 import engine as E
 
-VERSION = "1.6"
+VERSION = "1.7"
 import camsites
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
@@ -93,9 +93,22 @@ DETECTOR_JS = r"""
     btn.onclick = function (ev) {
       ev.stopPropagation(); ev.preventDefault();
       var cur = currentMedia() || { direct: null, embed: null };
-      console.log("GRABWAVE:" + JSON.stringify({
-        media: cur.direct, page: cur.direct ? location.href : (cur.embed || location.href),
-        title: document.title, referer: location.href }));
+      // Players often live in an iframe (Dailymotion, many others). The page address people paste is the TOP page.
+      var inFrame = false, topUrl = location.href, topTitle = document.title;
+      try { inFrame = !!window.top && window !== window.top; } catch (err) { inFrame = true; }
+      if (inFrame) {
+        try { topUrl = window.top.location.href; topTitle = window.top.document.title || topTitle; }
+        catch (err) { topUrl = document.referrer || location.href; }
+      }
+      var payload;
+      if (cur.direct) {
+        payload = { media: cur.direct, page: location.href, title: topTitle, referer: location.href };
+      } else {
+        payload = { media: null, page: inFrame ? topUrl : (cur.embed || location.href),
+                    embed: inFrame ? location.href : (cur.embed || null), embedReferer: topUrl,
+                    title: topTitle, referer: inFrame ? topUrl : location.href };
+      }
+      console.log("GRABWAVE:" + JSON.stringify(payload));
       btn.textContent = "✓ Added";
       setTimeout(function () { if (btn) btn.textContent = "⬇ Download"; }, 1500);
     };
@@ -886,13 +899,19 @@ class MainWindow(QtWidgets.QMainWindow):
         top.setContentsMargins(14, 10, 14, 8)
         add = QtWidgets.QToolButton()
         add.setText("+")
-        add.setToolTip("Add downloads")
-        add.setPopupMode(QtWidgets.QToolButton.InstantPopup)
-        m = QtWidgets.QMenu(add)
-        m.addAction("Download videos from URLs…", lambda: self._add_dialog(False))
-        m.addAction("Record live streams…", lambda: self._add_dialog(True))
-        add.setMenu(m)
+        add.setToolTip("Paste the link you copied and start downloading")
+        add.clicked.connect(lambda: self._add_from_clipboard(True))
+        more = QtWidgets.QToolButton()
+        more.setText("▾")
+        more.setToolTip("More ways to add")
+        more.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        m = QtWidgets.QMenu(more)
+        m.addAction("Paste copied link(s) and start", lambda: self._add_from_clipboard(True))
+        m.addAction("Add several links…", lambda: self._add_dialog(False))
+        m.addAction("Record a live stream…", lambda: self._add_dialog(True))
+        more.setMenu(m)
         top.addWidget(add)
+        top.addWidget(more)
         top.addStretch(1)
         seg = QtWidgets.QFrame()
         seg.setObjectName("segwrap")
@@ -1032,6 +1051,42 @@ class MainWindow(QtWidgets.QMainWindow):
             self.setWindowTitle(title)
 
     # --- actions ----------------------------------------------------------
+    def _clipboard_urls(self) -> list:
+        import re
+        text = QtWidgets.QApplication.clipboard().text() or ""
+        urls = [u.rstrip(".,;)'\"") for u in re.findall(r"https?://[^\s<>\"']+", text)]
+        return list(dict.fromkeys(urls))
+
+    def _add_from_clipboard(self, ask_if_empty: bool = False):
+        """Add whatever link(s) are on the clipboard and start right away (no window)."""
+        urls = self._clipboard_urls()
+        if not urls:
+            if ask_if_empty:
+                self._add_dialog(False)  # nothing copied yet: let the person type or paste a link
+            else:
+                self.statusBar().showMessage("No link on the clipboard", 2500)
+            return
+        here = self.browser.current_url().rstrip("/")
+        for u in urls:
+            kind = "live" if camsites.detect(u) else "download"
+            it = self.mgr.add(u, kind, "")
+            if kind == "download" and u.rstrip("/") == here:  # the page open in the built-in browser
+                alt = self.browser.best_media()
+                if alt:
+                    it.alt_url, it.alt_referer = alt, u
+        self.model.reset()
+        self.mgr.save()
+        self.tab_dl.setChecked(True)
+        self._tab_changed()
+        self.statusBar().showMessage(f"Added {len(urls)} link" + ("" if len(urls) == 1 else "s") + " and started", 3000)
+
+    def keyPressEvent(self, e):
+        if e.matches(QtGui.QKeySequence.Paste):  # Ctrl+V anywhere outside a text box
+            self._add_from_clipboard(False)
+            e.accept()
+            return
+        super().keyPressEvent(e)
+
     def _add_dialog(self, live: bool):
         d = AddDialog(self, self.cfg, live)
         if d.exec() == QtWidgets.QDialog.Accepted:
@@ -1052,12 +1107,16 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         it = self.mgr.add(url, "live" if camsites.detect(url) else "download", "")
         referer = (info.get("referer") or "").strip()
-        if referer and referer != url:  # e.g. embedded player: the hosting page must be sent as Referer
+        if referer and referer != url and media:  # direct media address: send the page that played it as Referer
             it.referer = referer
         alt = (info.get("alt") or "").strip()
+        emb = (info.get("embed") or "").strip()
         if alt.lower().startswith(("http://", "https://")) and alt != url:
             it.alt_url = alt
             it.alt_referer = (info.get("alt_referer") or page or "").strip()
+        elif emb.lower().startswith(("http://", "https://")) and emb != url:
+            it.alt_url = emb  # the player frame's own address, tried if the page address fails
+            it.alt_referer = (info.get("embedReferer") or page or "").strip()
         if media or it.alt_url:  # direct address or captured stream: use the page title as the file name
             name = re.sub(r'[\\/:*?"<>|%\r\n\t]', "", (info.get("title") or "")).strip()[:150].strip()
             if name:
