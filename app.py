@@ -17,8 +17,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
 import engine as E
+import ui_extra as UI
 
-VERSION = "1.8"
+VERSION = "2.0"
 import camsites
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
@@ -191,49 +192,7 @@ if HAVE_WEB:
                 return
             super().javaScriptConsoleMessage(level, message, line, source)
 
-ACCENT = "#5b3df5"
-RED = "#e53935"
-GRAY = "#8a8a8a"
-
-DEFAULT_SITES = [
-    ("YouTube", "https://www.youtube.com", "#e62117"),
-    ("Vimeo", "https://vimeo.com", "#1ab7ea"),
-    ("Facebook", "https://www.facebook.com", "#1877f2"),
-    ("Instagram", "https://www.instagram.com", "#c13584"),
-    ("TikTok", "https://www.tiktok.com", "#161616"),
-    ("Twitch", "https://www.twitch.tv", "#9146ff"),
-    ("Dailymotion", "https://www.dailymotion.com", "#0066dc"),
-    ("Bilibili", "https://www.bilibili.com", "#00a1d6"),
-    ("SoundCloud", "https://soundcloud.com", "#ff5500"),
-    ("Stripchat", "https://stripchat.com", "#6c4cf5"),
-    ("Chaturbate", "https://chaturbate.com", "#f6922d"),
-]
-
-STYLE = f"""
-QWidget {{ font-family: "Segoe UI", "Noto Sans", "Ubuntu", sans-serif; font-size: 13px; color: #222; }}
-QMainWindow, QSplitter {{ background: #ffffff; }}
-#left {{ background: #ffffff; }}
-#right {{ background: #f5f5f5; }}
-QToolButton {{ border: none; background: transparent; padding: 4px 8px; border-radius: 4px; font-size: 18px; }}
-QToolButton:hover {{ background: #e9e9e9; }}
-QToolButton:disabled {{ color: #bbb; }}
-QToolButton::menu-indicator {{ image: none; }}
-QLineEdit {{ border: 1px solid #dcdcdc; border-radius: 4px; padding: 5px 8px; background: #ffffff; }}
-QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
-QLineEdit[readOnly="true"] {{ background: #ececec; color: #666; }}
-QPushButton#primary {{ background: {ACCENT}; color: white; border: none; border-radius: 4px; padding: 6px 16px; }}
-QPushButton#primary:hover {{ background: #4a2fe0; }}
-QPushButton#outline {{ background: #ffffff; border: 1px solid #cfcfcf; border-radius: 4px; padding: 5px 14px; }}
-QPushButton#outline:hover {{ background: #f0f0f0; }}
-QPushButton#small {{ background: #ffffff; border: 1px solid #cfcfcf; border-radius: 3px; padding: 2px 8px; }}
-#segwrap {{ background: #e3e3e3; border-radius: 6px; }}
-#segwrap QPushButton {{ border: none; background: transparent; padding: 5px 0; border-radius: 5px; min-width: 112px; }}
-#segwrap QPushButton:checked {{ background: #ffffff; }}
-QComboBox {{ border: 1px solid #cfcfcf; border-radius: 4px; padding: 3px 8px; background: #efefef; min-width: 64px; }}
-QComboBox QAbstractItemView {{ background: white; selection-background-color: {ACCENT}; selection-color: white; }}
-QListView {{ background: transparent; border: none; outline: 0; }}
-QFrame#sep {{ background: #e0e0e0; max-height: 1px; min-height: 1px; }}
-"""
+ACCENT, RED, GRAY = UI.ACCENT, UI.RED, UI.GRAY
 
 
 def open_path(p: str) -> None:
@@ -248,76 +207,6 @@ def open_path(p: str) -> None:
 # ============================================================================
 # Left side: built-in browser
 # ============================================================================
-
-class Tile(QtWidgets.QToolButton):
-    def __init__(self, label: str, color: str, glyph: str | None = None):
-        super().__init__()
-        pm = QtGui.QPixmap(48, 48)
-        pm.fill(Qt.transparent)
-        p = QtGui.QPainter(pm)
-        p.setRenderHint(QtGui.QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QtGui.QColor(color))
-        p.drawEllipse(0, 0, 48, 48)
-        p.setPen(QtGui.QColor("white"))
-        f = p.font()
-        f.setBold(True)
-        f.setPointSize(16)
-        p.setFont(f)
-        p.drawText(pm.rect(), Qt.AlignCenter, glyph or label[:1].upper())
-        p.end()
-        self.setIcon(QtGui.QIcon(pm))
-        self.setIconSize(QtCore.QSize(48, 48))
-        self.setText(label)
-        self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        self.setFixedSize(124, 96)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet("QToolButton { font-size: 12px; }")
-
-
-class HomePage(QtWidgets.QWidget):
-    siteClicked = QtCore.Signal(str)
-
-    def __init__(self, cfg: E.Config):
-        super().__init__()
-        self.cfg = cfg
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.addStretch(3)
-        wrap = QtWidgets.QWidget()
-        self.grid = QtWidgets.QGridLayout(wrap)
-        self.grid.setHorizontalSpacing(4)
-        self.grid.setVerticalSpacing(10)
-        outer.addWidget(wrap, 0, Qt.AlignHCenter)
-        outer.addStretch(2)
-        self.rebuild()
-
-    def rebuild(self):
-        while self.grid.count():
-            w = self.grid.takeAt(0).widget()
-            if w:
-                w.deleteLater()
-        sites = list(DEFAULT_SITES) + [(n, u, "#7a7a7a") for n, u in self.cfg.custom_sites]
-        for i, (name, url, color) in enumerate(sites):
-            t = Tile(name, color)
-            t.clicked.connect(lambda _=False, u=url: self.siteClicked.emit(u))
-            self.grid.addWidget(t, i // 4, i % 4)
-        plus = Tile("", "#bdbdbd", "+")
-        plus.setToolTip("Add a shortcut")
-        plus.clicked.connect(self._add_site)
-        n = len(sites)
-        self.grid.addWidget(plus, n // 4, n % 4)
-
-    def _add_site(self):
-        name, ok = QtWidgets.QInputDialog.getText(self, "Add shortcut", "Name:")
-        if not ok or not name.strip():
-            return
-        url, ok = QtWidgets.QInputDialog.getText(self, "Add shortcut", "Address:", text="https://")
-        if not ok or not url.strip():
-            return
-        self.cfg.custom_sites.append([name.strip(), url.strip()])
-        self.cfg.save()
-        self.rebuild()
-
 
 class BrowserPane(QtWidgets.QWidget):
     addRequested = QtCore.Signal(str)
@@ -360,7 +249,7 @@ class BrowserPane(QtWidgets.QWidget):
         lay.addLayout(bar)
 
         self.stack = QtWidgets.QStackedWidget()
-        self.home = HomePage(cfg)
+        self.home = UI.HomePage(cfg)
         self.home.siteClicked.connect(self.navigate)
         self.stack.addWidget(self.home)
         lay.addWidget(self.stack, 1)
@@ -563,133 +452,6 @@ class FilterProxy(QtCore.QSortFilterProxyModel):
         return row < len(items) and self.pred(items[row])
 
 
-def status_line(it: E.Item) -> tuple[str, str]:
-    s = it.status
-    pct = min(100, int(it.done * 100 / it.total)) if it.total else None
-    if s == "Failed":
-        return "Failed to download. Please try again.", RED
-    if s == "Downloading":
-        parts = [f"{pct}%" if pct is not None else E.fmt_size(it.done)]
-        if it.speed:
-            parts.append(E.fmt_speed(it.speed))
-        if it.eta:
-            parts.append("ETA " + E.fmt_dur(it.eta))
-        return "  ·  ".join(parts), GRAY
-    if s == "Recording":
-        parts = ["● Recording"]
-        if it.started:
-            parts.append(E.fmt_dur(time.time() - it.started))
-        parts.append(E.fmt_size(it.done))
-        if it.speed:
-            parts.append(E.fmt_speed(it.speed))
-        return "  ·  ".join(parts), RED
-    if s == "Waiting":
-        return "Waiting for the stream to start…", GRAY
-    if s == "Processing":
-        return "Converting…", GRAY
-    if s == "Completed":
-        return f"Completed  ·  {E.fmt_size(it.done or it.total)}", "#2e7d32"
-    if s == "Paused":
-        return "Paused" + (f"  ·  {pct}%" if pct is not None else ""), GRAY
-    return s, GRAY
-
-
-class CardDelegate(QtWidgets.QStyledItemDelegate):
-    actionClicked = QtCore.Signal(object)
-    ROW_H = 84
-
-    @staticmethod
-    def _geom(rect: QtCore.QRect):
-        card = rect.adjusted(6, 4, -6, -4)
-        thumb = QtCore.QRect(card.left() + 8, card.top() + 8, 92, card.height() - 16)
-        action = QtCore.QRect(card.right() - 40, card.center().y() - 16, 32, 32)
-        return card, thumb, action
-
-    def sizeHint(self, option, index):
-        return QtCore.QSize(option.rect.width(), self.ROW_H)
-
-    def paint(self, p, opt, idx):
-        it = idx.data(Qt.UserRole)
-        if it is None:
-            return
-        card, thumb, action = self._geom(opt.rect)
-        p.save()
-        p.setRenderHint(QtGui.QPainter.Antialiasing)
-        selected = bool(opt.state & QtWidgets.QStyle.State_Selected)
-        p.setPen(QtGui.QPen(QtGui.QColor(ACCENT if selected else "#e4e4e4")))
-        p.setBrush(QtGui.QColor("#f1eeff" if selected else "#ffffff"))
-        p.drawRoundedRect(card, 6, 6)
-
-        # thumbnail placeholder
-        p.setPen(Qt.NoPen)
-        p.setBrush(QtGui.QColor("#d6d6d6"))
-        p.drawRoundedRect(thumb, 4, 4)
-        live = it.kind == "live"
-        p.setPen(QtGui.QColor(RED if live and it.status == "Recording" else "#ffffff"))
-        f = p.font()
-        f.setPointSize(11 if live else 18)
-        f.setBold(True)
-        p.setFont(f)
-        p.drawText(thumb, Qt.AlignCenter, "● LIVE" if live else "▶")
-
-        # text
-        x = thumb.right() + 12
-        w = max(40, action.left() - 8 - x)
-        f = p.font()
-        f.setBold(False)
-        f.setPointSize(10)
-        p.setFont(f)
-        fm = QtGui.QFontMetrics(f)
-        p.setPen(QtGui.QColor("#222222"))
-        title_rect = QtCore.QRect(x, card.top() + 9, w, 18)
-        p.drawText(title_rect, Qt.AlignVCenter | Qt.AlignLeft, fm.elidedText(it.title, Qt.ElideMiddle, w))
-        text, color = status_line(it)
-        f.setPointSize(9)
-        p.setFont(f)
-        p.setPen(QtGui.QColor(color))
-        fm2 = QtGui.QFontMetrics(f)
-        p.drawText(QtCore.QRect(x, card.top() + 31, w, 18), Qt.AlignVCenter | Qt.AlignLeft,
-                   fm2.elidedText(text, Qt.ElideRight, w))
-        if it.status == "Downloading" and it.total:
-            bar = QtCore.QRect(x, card.bottom() - 17, w, 6)
-            p.setPen(Qt.NoPen)
-            p.setBrush(QtGui.QColor("#e3e3e3"))
-            p.drawRoundedRect(bar, 3, 3)
-            fill = QtCore.QRect(bar)
-            fill.setWidth(int(bar.width() * min(1.0, it.done / it.total)))
-            p.setBrush(QtGui.QColor(ACCENT))
-            p.drawRoundedRect(fill, 3, 3)
-
-        # action glyph
-        glyph, gcolor = self.action_glyph(it)
-        f = p.font()
-        f.setPointSize(13)
-        p.setFont(f)
-        p.setPen(QtGui.QColor(gcolor))
-        p.drawText(action, Qt.AlignCenter, glyph)
-        p.restore()
-
-    @staticmethod
-    def action_glyph(it: E.Item) -> tuple[str, str]:
-        if it.status in ("Failed", "Paused", "Stopped"):
-            return "⟳", RED if it.status == "Failed" else ACCENT
-        if it.status == "Completed":
-            return "↗", ACCENT
-        if it.kind == "live" and it.running:
-            return "■", RED
-        return "❚❚", ACCENT
-
-    def editorEvent(self, event, model, option, index):
-        if event.type() == QtCore.QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-            _, _, action = self._geom(option.rect)
-            if action.adjusted(-6, -6, 6, 6).contains(event.position().toPoint()):
-                it = index.data(Qt.UserRole)
-                if it is not None:
-                    self.actionClicked.emit(it)
-                return True
-        return False
-
-
 # ============================================================================
 # Dialogs
 # ============================================================================
@@ -731,8 +493,32 @@ class SettingsDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.cfg = cfg
         self.setWindowTitle("Settings")
-        self.resize(560, 0)
+        self.resize(620, 0)
         form = QtWidgets.QFormLayout(self)
+
+        perf_box = QtWidgets.QGroupBox("Performance")
+        pl = QtWidgets.QVBoxLayout(perf_box)
+        pl.setSpacing(4)
+        self.perf_radios = {}
+        labels = {"Maximum": "Maximum (use all the resources it needs)", "Balanced": "Balanced (recommended)",
+                  "Light": "Light (use fewer resources)"}
+        grp = QtWidgets.QButtonGroup(self)
+        current = cfg.performance if cfg.performance in E.PERFORMANCE else "Balanced"
+        for name in ("Maximum", "Balanced", "Light"):
+            rb = QtWidgets.QRadioButton(labels[name])
+            rb.setChecked(name == current)
+            grp.addButton(rb)
+            self.perf_radios[name] = rb
+            note = QtWidgets.QLabel(E.PERFORMANCE_NOTES[name])
+            note.setWordWrap(True)
+            note.setStyleSheet(f"color: {UI.MUTED}; margin-left: 24px; margin-bottom: 6px; font-weight: 400;")
+            pl.addWidget(rb)
+            pl.addWidget(note)
+        hint = QtWidgets.QLabel("Speed and priority change right away. The browser part changes after Grabwave restarts.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {UI.FAINT}; font-weight: 400;")
+        pl.addWidget(hint)
+        form.addRow(perf_box)
 
         w = QtWidgets.QWidget()
         h = QtWidgets.QHBoxLayout(w)
@@ -748,7 +534,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.maxc = QtWidgets.QSpinBox()
         self.maxc.setRange(1, E.MAX_CONCURRENT)
         self.maxc.setValue(cfg.max_concurrent)
-        form.addRow(f"Simultaneous downloads / recordings (max {E.MAX_CONCURRENT}):", self.maxc)
+        form.addRow(f"Most at once (max {E.MAX_CONCURRENT}; the performance mode may lower it):", self.maxc)
 
         self.quality = QtWidgets.QLineEdit(cfg.live_quality)
         self.quality.setPlaceholderText("best, worst, 720p, 1080p60 …")
@@ -759,6 +545,16 @@ class SettingsDialog(QtWidgets.QDialog):
         self.poll.setSuffix(" s")
         self.poll.setValue(cfg.live_poll_seconds)
         form.addRow("Check offline channels every:", self.poll)
+
+        self.smart = QtWidgets.QCheckBox("Offer to grab links I copy (a small card appears)")
+        self.smart.setChecked(cfg.smart_paste)
+        form.addRow("", self.smart)
+        self.tray_cb = QtWidgets.QCheckBox("Keep running in the system tray when I close the window (needed for the watchlist)")
+        self.tray_cb.setChecked(cfg.close_to_tray)
+        form.addRow("", self.tray_cb)
+        self.sounds = QtWidgets.QCheckBox("Play a sound when something finishes")
+        self.sounds.setChecked(cfg.sounds)
+        form.addRow("", self.sounds)
 
         self.remux = QtWidgets.QCheckBox("Convert finished recordings (.ts) to .mp4 (needs ffmpeg)")
         self.remux.setChecked(cfg.remux_mp4)
@@ -839,6 +635,8 @@ class SettingsDialog(QtWidgets.QDialog):
         c = self.cfg
         c.live_dir = self.live.text().strip()
         c.max_concurrent = self.maxc.value()
+        c.performance = next((n for n, rb in self.perf_radios.items() if rb.isChecked()), "Balanced")
+        c.smart_paste, c.close_to_tray, c.sounds = self.smart.isChecked(), self.tray_cb.isChecked(), self.sounds.isChecked()
         c.live_quality = self.quality.text().strip() or "best"
         c.live_poll_seconds = self.poll.value()
         c.remux_mp4 = self.remux.isChecked()
@@ -854,48 +652,168 @@ class SettingsDialog(QtWidgets.QDialog):
 # Main window
 # ============================================================================
 
+class TrayView(QtWidgets.QListView):
+    """The download cards; tells the window when its width changes so the columns can be recomputed."""
+    resized = QtCore.Signal()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.resized.emit()
+
+
 class MainWindow(QtWidgets.QMainWindow):
+    toolFinished = QtCore.Signal(object, str, str)  # source item, new file, error text
+
     def __init__(self, mgr: E.Manager):
         super().__init__()
         self.mgr = mgr
         self.cfg = mgr.cfg
         self.setWindowTitle(f"Grabwave {VERSION}")
-        self.resize(1160, 820)
+        self.resize(1200, 800)
+        self.setMinimumSize(900, 620)
         self.setAcceptDrops(True)
+        self._quitting = False
+        self._tray_hinted = False
+        self._last_offer = ""
+        self._seen_running: set = set()
+        self._announced: set = {i.id for i in mgr.items if i.status in ("Completed", "Failed")}
+        self._tick_n = 0
 
-        split = QtWidgets.QSplitter(Qt.Horizontal)
-        split.setChildrenCollapsible(False)
+        self.thumbs = UI.ThumbCache(self.cfg)
+        self.thumbs.ready.connect(lambda _id: self.view.viewport().update())
+        self.watcher = UI.Watcher(mgr, self.cfg)
+        self.watcher.wentLive.connect(self._went_live)
+        self.toolFinished.connect(self._on_tool)
+
+        central = QtWidgets.QWidget()
+        central.setObjectName("page")
+        central.setAttribute(Qt.WA_StyledBackground, True)
+        v = QtWidgets.QVBoxLayout(central)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        v.addWidget(self._build_header())
+        v.addWidget(UI.WaveLine())
+
+        self.pages = QtWidgets.QStackedWidget()
         self.browser = BrowserPane(self.cfg)
         self.browser.addRequested.connect(self._add_from_browser)
         self.browser.mediaFound.connect(self._add_media)
-        split.addWidget(self.browser)
-        split.addWidget(self._build_right())
-        split.setStretchFactor(0, 3)
-        split.setStretchFactor(1, 2)
-        split.setSizes([660, 500])
-        self.setCentralWidget(split)
+        self.browser.home.grabRequested.connect(lambda u: self._add_url(u))
+        self.shelf = UI.ShelfPage(mgr, self.thumbs)
+        self.shelf.openRequested.connect(self._shelf_open)
+        self.shelf.folderRequested.connect(self._shelf_folder)
+        self.shelf.convertRequested.connect(self._shelf_convert)
+        self.shelf.trimRequested.connect(self._shelf_trim)
+        self.shelf.removeRequested.connect(lambda it, d: self._remove([it], d))
+        self.watch = UI.WatchPage(self.cfg, self.watcher)
+        self.pages.addWidget(self.browser)
+        self.pages.addWidget(self.shelf)
+        self.pages.addWidget(self.watch)
+        v.addWidget(self.pages, 1)
+        v.addWidget(self._build_tray())
+        self.setCentralWidget(central)
 
+        self.toast = UI.SmartToast(central, self.cfg)
+        self.toast.grab.connect(lambda u, q: self._add_url(u, q))
+        self.splash = UI.Splash(central)
+
+        self.tray_icon = None
+        if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon = QtWidgets.QSystemTrayIcon(QtWidgets.QApplication.windowIcon(), self)
+            self._tray_menu = QtWidgets.QMenu()  # kept on self so it isn't garbage-collected
+            self._tray_menu.addAction("Open Grabwave", self._show_from_tray)
+            self._tray_menu.addSeparator()
+            self._tray_menu.addAction("Quit", self._quit_app)
+            self.tray_icon.setContextMenu(self._tray_menu)
+            self.tray_icon.setToolTip("Grabwave")
+            self.tray_icon.activated.connect(
+                lambda r: self._show_from_tray() if r == QtWidgets.QSystemTrayIcon.Trigger else None)
+            self.tray_icon.show()
+
+        QtWidgets.QApplication.clipboard().dataChanged.connect(self._clip_changed)
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._tick)
-        self.timer.start(500)
         self.saver = QtCore.QTimer(self)
         self.saver.timeout.connect(mgr.save)
         self.saver.start(10000)
+        self._apply_perf()
         self._tab_changed()
+        self._apply_tray_state()
+        self._layout_cards()
         self._tick()
+        urls = self._clipboard_urls()  # a link already on the clipboard: show it in the paste bar
+        self.browser.home.set_clipboard_url(urls[0] if urls else "")
 
-    # --- right panel ------------------------------------------------------
-    def _build_right(self) -> QtWidgets.QWidget:
-        right = QtWidgets.QWidget()
-        right.setObjectName("right")
-        right.setAttribute(Qt.WA_StyledBackground, True)
-        lay = QtWidgets.QVBoxLayout(right)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+    # --- header and tray ---------------------------------------------------
+    def _build_header(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        h = QtWidgets.QHBoxLayout(w)
+        h.setContentsMargins(22, 12, 18, 8)
+        h.setSpacing(6)
+        logo = QtWidgets.QLabel("grabwave")
+        logo.setFont(UI.serif(17))
+        logo.setStyleSheet(f"color: {UI.ACCENT};")
+        h.addWidget(logo)
+        h.addSpacing(14)
+        grp = QtWidgets.QButtonGroup(self)
+        grp.setExclusive(True)
+        self.tabs = []
+        for i, name in enumerate(("Browse", "Shelf", "Live")):
+            b = QtWidgets.QPushButton(name)
+            b.setObjectName("tab")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            grp.addButton(b, i)
+            h.addWidget(b)
+            self.tabs.append(b)
+        self.tabs[0].setChecked(True)
+        grp.idClicked.connect(self._page_changed)
+        h.addStretch(1)
+        self.mascot = UI.Wavy("sleepy", 34)
+        h.addWidget(self.mascot)
+        gear = QtWidgets.QToolButton()
+        gear.setText("⚙")
+        gear.setToolTip("Settings")
+        gear.clicked.connect(self._settings)
+        h.addWidget(gear)
+        return w
 
-        # top row: + | Downloading / Finished | settings
-        top = QtWidgets.QHBoxLayout()
-        top.setContentsMargins(14, 10, 14, 8)
+    def _page_changed(self, i: int):
+        self.pages.setCurrentIndex(i)
+        if i == 1:
+            self.shelf.refresh(force=True)
+        elif i == 2:
+            self.watch.refresh_status()
+
+    def _build_tray(self) -> QtWidgets.QWidget:
+        self.tray = QtWidgets.QFrame()
+        self.tray.setObjectName("tray")
+        lay = QtWidgets.QVBoxLayout(self.tray)
+        lay.setContentsMargins(22, 8, 22, 10)
+        lay.setSpacing(6)
+
+        head = QtWidgets.QHBoxLayout()
+        head.setSpacing(14)
+        t = QtWidgets.QLabel("Tray")
+        t.setFont(UI.serif(12))
+        head.addWidget(t)
+        self.tab_dl = QtWidgets.QPushButton("Downloading 0")
+        self.tab_fin = QtWidgets.QPushButton("Finished 0")
+        grp = QtWidgets.QButtonGroup(self)
+        grp.setExclusive(True)
+        for b in (self.tab_dl, self.tab_fin):
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            grp.addButton(b)
+            head.addWidget(b)
+        self.tab_dl.setChecked(True)
+        grp.buttonClicked.connect(lambda *_: self._tab_changed())
+        self.summary = QtWidgets.QLabel("")
+        self.summary.setStyleSheet(f"color: {UI.MUTED};")
+        head.addWidget(self.summary)
+        head.addStretch(1)
+
         add = QtWidgets.QToolButton()
         add.setText("+")
         add.setToolTip("Paste the link you copied and start downloading")
@@ -909,115 +827,129 @@ class MainWindow(QtWidgets.QMainWindow):
         m.addAction("Add several links…", lambda: self._add_dialog(False))
         m.addAction("Record a live stream…", lambda: self._add_dialog(True))
         more.setMenu(m)
-        top.addWidget(add)
-        top.addWidget(more)
-        top.addStretch(1)
-        seg = QtWidgets.QFrame()
-        seg.setObjectName("segwrap")
-        sl = QtWidgets.QHBoxLayout(seg)
-        sl.setContentsMargins(3, 3, 3, 3)
-        sl.setSpacing(0)
-        self.tab_dl = QtWidgets.QPushButton("Downloading")
-        self.tab_fin = QtWidgets.QPushButton("Finished")
-        grp = QtWidgets.QButtonGroup(self)
-        grp.setExclusive(True)
-        for b in (self.tab_dl, self.tab_fin):
-            b.setCheckable(True)
-            b.setCursor(Qt.PointingHandCursor)
-            grp.addButton(b)
-            sl.addWidget(b)
-        self.tab_dl.setChecked(True)
-        grp.buttonClicked.connect(lambda *_: self._tab_changed())
-        top.addWidget(seg)
-        top.addStretch(1)
-        gear = QtWidgets.QToolButton()
-        gear.setText("⚙")
-        gear.setToolTip("Settings")
-        gear.clicked.connect(self._settings)
-        top.addWidget(gear)
-        lay.addLayout(top)
-
-        # list
-        self.model = ListModel(self.mgr)
-        self.proxy = FilterProxy()
-        self.proxy.setSourceModel(self.model)
-        self.view = QtWidgets.QListView()
-        self.view.setModel(self.proxy)
-        self.delegate = CardDelegate(self.view)
-        self.delegate.actionClicked.connect(self._card_action)
-        self.view.setItemDelegate(self.delegate)
-        self.view.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        self.view.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
-        self.view.setUniformItemSizes(True)
-        self.view.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.view.customContextMenuRequested.connect(self._context_menu)
-        self.view.doubleClicked.connect(lambda _: self._open_file())
-        lay.addWidget(self.view, 1)
-
-        sep = QtWidgets.QFrame()
-        sep.setObjectName("sep")
-        lay.addWidget(sep)
-
-        # footer row 1: count + Resume All / Pause All / trash
-        f1 = QtWidgets.QHBoxLayout()
-        f1.setContentsMargins(14, 10, 14, 6)
-        self.count = QtWidgets.QLabel("0 items")
-        f1.addWidget(self.count)
-        f1.addStretch(1)
-        b = QtWidgets.QPushButton("Resume All")
+        head.addWidget(add)
+        head.addWidget(more)
+        b = QtWidgets.QPushButton("Resume all")
         b.setObjectName("outline")
         b.clicked.connect(self._resume_all)
-        f1.addWidget(b)
-        b = QtWidgets.QPushButton("Pause All")
-        b.setObjectName("primary")
+        head.addWidget(b)
+        b = QtWidgets.QPushButton("Pause all")
+        b.setObjectName("outline")
         b.clicked.connect(self._pause_all)
-        f1.addWidget(b)
+        head.addWidget(b)
         trash = QtWidgets.QToolButton()
         trash.setText("🗑")
         trash.setToolTip("Remove selected (or everything in this list)")
         trash.clicked.connect(self._trash)
-        f1.addWidget(trash)
-        lay.addLayout(f1)
+        head.addWidget(trash)
+        self.collapse_btn = QtWidgets.QPushButton("Collapse ▾")
+        self.collapse_btn.setObjectName("small")
+        self.collapse_btn.clicked.connect(self._toggle_tray)
+        head.addWidget(self.collapse_btn)
+        lay.addLayout(head)
 
-        # footer row 2: Format / Quality / Subtitle
-        f2 = QtWidgets.QHBoxLayout()
-        f2.setContentsMargins(14, 4, 14, 6)
+        self.tray_body = QtWidgets.QWidget()
+        bl = QtWidgets.QVBoxLayout(self.tray_body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+
+        self.model = ListModel(self.mgr)
+        self.proxy = FilterProxy()
+        self.proxy.setSourceModel(self.model)
+        self.view = TrayView()
+        self.view.setModel(self.proxy)
+        self.view.setViewMode(QtWidgets.QListView.IconMode)
+        self.view.setResizeMode(QtWidgets.QListView.Adjust)
+        self.view.setMovement(QtWidgets.QListView.Static)
+        self.view.setSpacing(0)
+        self.view.setMouseTracking(True)
+        self.delegate = UI.CardDelegate(self.view, self.thumbs)
+        self.delegate.action.connect(self._card_action)
+        self.view.setItemDelegate(self.delegate)
+        self.view.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.view.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._context_menu)
+        self.view.doubleClicked.connect(lambda _: self._open_file())
+        self.view.resized.connect(self._layout_cards)
+        self.empty = UI.EmptyState("Nothing here yet", "Paste a link above, or just copy one anywhere.")
+        self.list_stack = QtWidgets.QStackedWidget()
+        self.list_stack.addWidget(self.empty)
+        self.list_stack.addWidget(self.view)
+        self.list_stack.setMinimumHeight(150)
+        bl.addWidget(self.list_stack, 1)
+
+        opts = QtWidgets.QHBoxLayout()
+        opts.setSpacing(8)
 
         def combo(label, items, current, setter):
-            f2.addWidget(QtWidgets.QLabel(label))
+            lb = QtWidgets.QLabel(label)
+            lb.setStyleSheet(f"color: {UI.MUTED};")
+            opts.addWidget(lb)
             c = QtWidgets.QComboBox()
             c.addItems(items)
             c.setCurrentText(current)
             c.currentTextChanged.connect(setter)
-            f2.addWidget(c)
+            opts.addWidget(c)
             return c
 
-        combo("Format:", ["MP4", "MKV", "WEBM", "MP3 (audio)"], self.cfg.fmt, lambda t: self._pref("fmt", t))
-        combo("Quality:", ["Best", "2160p", "1440p", "1080p", "720p", "480p", "360p"],
+        combo("Format", ["MP4", "MKV", "WEBM", "MP3 (audio)"], self.cfg.fmt, lambda t: self._pref("fmt", t))
+        combo("Quality", ["Best", "2160p", "1440p", "1080p", "720p", "480p", "360p"],
               self.cfg.quality, lambda t: self._pref("quality", t))
-        combo("Subtitle:", ["None"] + list(E.SUBTITLE_CODES), self.cfg.subtitle,
+        combo("Subtitle", ["None"] + list(E.SUBTITLE_CODES), self.cfg.subtitle,
               lambda t: self._pref("subtitle", t))
-        f2.addStretch(1)
-        lay.addLayout(f2)
-
-        # footer row 3: file location
-        f3 = QtWidgets.QHBoxLayout()
-        f3.setContentsMargins(14, 4, 14, 12)
-        f3.addWidget(QtWidgets.QLabel("File Location:"))
+        opts.addSpacing(10)
+        lb = QtWidgets.QLabel("Save to")
+        lb.setStyleSheet(f"color: {UI.MUTED};")
+        opts.addWidget(lb)
         self.loc = QtWidgets.QLineEdit(self.cfg.download_dir)
         self.loc.setReadOnly(True)
-        f3.addWidget(self.loc, 1)
+        opts.addWidget(self.loc, 1)
         b = QtWidgets.QPushButton("Change")
         b.setObjectName("small")
         b.clicked.connect(self._change_dir)
-        f3.addWidget(b)
+        opts.addWidget(b)
         fb = QtWidgets.QToolButton()
         fb.setText("📁")
         fb.setToolTip("Open folder")
         fb.clicked.connect(self._open_dir)
-        f3.addWidget(fb)
-        lay.addLayout(f3)
-        return right
+        opts.addWidget(fb)
+        bl.addLayout(opts)
+        lay.addWidget(self.tray_body)
+        return self.tray
+
+    def _toggle_tray(self):
+        self.cfg.tray_collapsed = not self.cfg.tray_collapsed
+        self.cfg.save()
+        self._apply_tray_state()
+
+    def _apply_tray_state(self):
+        c = self.cfg.tray_collapsed
+        self.tray_body.setVisible(not c)
+        self.collapse_btn.setText("Expand ▴" if c else "Collapse ▾")
+        QtCore.QTimer.singleShot(0, self._place_overlays)
+
+    def _layout_cards(self):
+        vw = max(300, self.view.viewport().width() - 2)
+        cols = max(1, min(4, vw // 330))
+        w = vw // cols
+        self.delegate.cell = QtCore.QSize(w, 92)
+        self.view.setGridSize(self.delegate.cell)
+
+    def _place_overlays(self):
+        top = self.tray.y()
+        self.toast.reposition(top)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_overlays()
+
+    # --- performance ------------------------------------------------------
+    def _apply_perf(self):
+        p = E.perf(self.cfg)
+        self.timer.start(p["tick"])
+        E.apply_priority(self.cfg)
+        self.thumbs.set_workers(p["thumbs"])
 
     # --- helpers ----------------------------------------------------------
     def _selected(self) -> list[E.Item]:
@@ -1039,22 +971,75 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mgr.tick()
         self.model.refresh()
         self.proxy.invalidateFilter()
-        n = self.proxy.rowCount()
-        self.count.setText(f"{n} item" + ("" if n == 1 else "s"))
+        self._tick_n += 1
+        items = self.mgr.items
+        n_fin = sum(1 for i in items if i.status == "Completed")
+        n_dl = len(items) - n_fin
+        t1, t2 = f"Downloading {n_dl}", f"Finished {n_fin}"
+        if self.tab_dl.text() != t1:
+            self.tab_dl.setText(t1)
+        if self.tab_fin.text() != t2:
+            self.tab_fin.setText(t2)
+        self.list_stack.setCurrentIndex(1 if self.proxy.rowCount() else 0)
+        self.empty.title.setText("Nothing finished yet" if self.tab_fin.isChecked() else "Nothing here yet")
+        self.empty.sub.setText("Finished downloads and recordings land here." if self.tab_fin.isChecked()
+                               else "Paste a link above, or just copy one anywhere.")
         act = self.mgr.active_count()
-        spd = sum(i.speed for i in self.mgr.items if i.running)
+        spd = sum(i.speed for i in items if i.running)
+        rec = sum(1 for i in items if i.status == "Recording")
+        dls = sum(1 for i in items if i.status == "Downloading")
+        bits = []
+        if dls:
+            bits.append(f"{dls} downloading" + (f" · {E.fmt_speed(spd)}" if spd else ""))
+        if rec:
+            bits.append(f"{rec} recording")
+        txt = "  ·  ".join(bits)
+        if self.summary.text() != txt:
+            self.summary.setText(txt)
+        self.mascot.set_mood("working" if act else "sleepy")
         title = f"Grabwave {VERSION}"
         if act:
-            title += f"  —  {act}/{self.cfg.max_concurrent} active  ↓ {E.fmt_size(spd) if spd else '0 B'}/s"
+            title += f"  —  {act} active"
         if self.windowTitle() != title:
             self.setWindowTitle(title)
 
-    # --- actions ----------------------------------------------------------
+        # celebrate what just finished; note what failed
+        for it in items:
+            if it.running or it.status in ("Downloading", "Recording", "Waiting", "Processing"):
+                self._seen_running.add(it.id)
+            elif it.id not in self._announced:
+                if it.status == "Completed" and it.id in self._seen_running:
+                    self._announced.add(it.id)
+                    word = "recorded" if it.kind == "live" else "saved"
+                    self.splash.play(f"{it.title}", f"is {word}. Find it on your shelf.", self.tray.y())
+                    if self.cfg.sounds:
+                        QtWidgets.QApplication.beep()
+                elif it.status == "Failed":
+                    self._announced.add(it.id)
+                    self.statusBar().showMessage("One didn't work. Right-click it in the tray for details.", 6000)
+        if self.pages.currentIndex() == 1 and self._tick_n % 2 == 0:
+            self.shelf.refresh()
+        elif self.pages.currentIndex() == 2:
+            self.watch.refresh_status()
+
+    # --- clipboard / smart paste -------------------------------------------
     def _clipboard_urls(self) -> list:
         import re
         text = QtWidgets.QApplication.clipboard().text() or ""
         urls = [u.rstrip(".,;)'\"") for u in re.findall(r"https?://[^\s<>\"']+", text)]
         return list(dict.fromkeys(urls))
+
+    def _clip_changed(self):
+        urls = self._clipboard_urls()
+        url = urls[0] if urls else ""
+        self.browser.home.set_clipboard_url(url)
+        if not url or not self.cfg.smart_paste or url == self._last_offer:
+            return
+        if any(i.url == url for i in self.mgr.items):
+            return
+        self._last_offer = url
+        self.toast.offer(url)
+        self._place_overlays()
 
     def _add_from_clipboard(self, ask_if_empty: bool = False):
         """Add whatever link(s) are on the clipboard and start right away (no window)."""
@@ -1065,27 +1050,37 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self.statusBar().showMessage("No link on the clipboard", 2500)
             return
-        here = self.browser.current_url().rstrip("/")
         for u in urls:
-            kind = "live" if camsites.detect(u) else "download"
-            it = self.mgr.add(u, kind, "")
-            if kind == "download" and u.rstrip("/") == here:  # the page open in the built-in browser
-                alt = self.browser.best_media()
-                if alt:
-                    it.alt_url, it.alt_referer = alt, u
+            self._add_url(u, announce=False)
+        self.statusBar().showMessage(f"Added {len(urls)} link" + ("" if len(urls) == 1 else "s") + " and started", 3000)
+
+    def _add_url(self, u: str, quality: str = "", announce: bool = True) -> E.Item:
+        here = self.browser.current_url().rstrip("/")
+        kind = "live" if camsites.detect(u) else "download"
+        it = self.mgr.add(u, kind, "")
+        if quality:
+            it.quality = quality
+        if kind == "download" and u.rstrip("/") == here:  # the page open in the built-in browser
+            alt = self.browser.best_media()
+            if alt:
+                it.alt_url, it.alt_referer = alt, u
         self.model.reset()
         self.mgr.save()
         self.tab_dl.setChecked(True)
         self._tab_changed()
-        self.statusBar().showMessage(f"Added {len(urls)} link" + ("" if len(urls) == 1 else "s") + " and started", 3000)
+        if announce:
+            self.statusBar().showMessage("Added and started", 3000)
+        return it
 
     def keyPressEvent(self, e):
-        if e.matches(QtGui.QKeySequence.Paste):  # Ctrl+V anywhere outside a text box
-            self._add_from_clipboard(False)
+        if e.matches(QtGui.QKeySequence.Paste) and not isinstance(
+                QtWidgets.QApplication.focusWidget(), (QtWidgets.QLineEdit, QtWidgets.QPlainTextEdit)):
+            self._add_from_clipboard(False)  # Ctrl+V anywhere outside a text box
             e.accept()
             return
         super().keyPressEvent(e)
 
+    # --- adding ---------------------------------------------------------------
     def _add_dialog(self, live: bool):
         d = AddDialog(self, self.cfg, live)
         if d.exec() == QtWidgets.QDialog.Accepted:
@@ -1136,8 +1131,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.tab_dl.setChecked(True)
             self._tab_changed()
 
-    def _card_action(self, it: E.Item):
-        if it.status in ("Failed", "Paused", "Stopped"):
+    # --- card / list actions ----------------------------------------------------
+    def _card_action(self, it: E.Item, which: str):
+        if which == "remove":
+            self._remove([it], False)
+        elif which == "folder":
+            if it.path and os.path.exists(it.path):
+                open_path(str(Path(it.path).parent))
+            else:
+                self._open_dir()
+        elif it.status in ("Failed", "Paused", "Stopped"):
             self.mgr.resume(it)
         elif it.status == "Completed":
             if it.path and os.path.exists(it.path):
@@ -1170,8 +1173,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _remove(self, items, delete_file: bool):
         for it in items:
             self.mgr.remove(it, delete_file)
+            self.thumbs.forget(it.id)
+            if delete_file:
+                try:
+                    E.thumb_path(it).unlink(missing_ok=True)
+                except OSError:
+                    pass
         self.model.reset()
         self.mgr.save()
+        self.shelf.refresh(force=True)
 
     def _open_file(self):
         sel = self._selected()
@@ -1201,7 +1211,80 @@ class MainWindow(QtWidgets.QMainWindow):
             self.loc.setText(d)
 
     def _settings(self):
-        SettingsDialog(self, self.cfg).exec()
+        if SettingsDialog(self, self.cfg).exec() == QtWidgets.QDialog.Accepted:
+            self._apply_perf()
+            self.statusBar().showMessage(
+                f"Performance: {self.cfg.performance}. The browser part changes after Grabwave restarts.", 6000)
+
+    # --- shelf actions ------------------------------------------------------------
+    def _shelf_open(self, it: E.Item):
+        if it.path and os.path.exists(it.path):
+            open_path(it.path)
+
+    def _shelf_folder(self, it: E.Item):
+        if it.path and os.path.exists(it.path):
+            open_path(str(Path(it.path).parent))
+
+    def _shelf_convert(self, it: E.Item, kind: str):
+        self._run_tool(f"Converting to {kind.upper()}…", it, lambda: E.convert_file(it.path, kind, self.cfg))
+
+    def _shelf_trim(self, it: E.Item):
+        d = UI.TrimDialog(self, it.title)
+        if d.exec() != QtWidgets.QDialog.Accepted:
+            return
+        start, end = d.values()
+        if not start and not end:
+            return
+        self._run_tool("Trimming…", it, lambda: E.trim_file(it.path, start, end))
+
+    def _run_tool(self, label: str, src: E.Item, fn):
+        import threading
+        self.statusBar().showMessage(f"{label} {src.title}")
+
+        def work():
+            try:
+                self.toolFinished.emit(src, fn(), "")
+            except Exception as e:  # noqa: BLE001
+                self.toolFinished.emit(src, "", str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_tool(self, src: E.Item, out: str, err: str):
+        self.statusBar().clearMessage()
+        if err:
+            QtWidgets.QMessageBox.warning(self, "That didn't work", err)
+            return
+        new = E.Item(src.url, src.kind)
+        new.title = Path(out).stem
+        new.status = "Completed"
+        new.path = out
+        new.done = os.path.getsize(out)
+        new.added = time.time()
+        new.duration = src.duration
+        self.mgr.items.append(new)
+        self._announced.add(new.id)
+        self.model.reset()
+        self.mgr.save()
+        self.shelf.refresh(force=True)
+        self.splash.play(new.title, "is on your shelf.", self.tray.y())
+
+    # --- watchlist / tray icon ----------------------------------------------------
+    def _went_live(self, name: str):
+        msg = f"{name} just went live. Recording started."
+        if self.tray_icon is not None and self.tray_icon.isVisible():
+            self.tray_icon.showMessage("Grabwave", msg, QtWidgets.QSystemTrayIcon.Information, 6000)
+        self.statusBar().showMessage(msg, 8000)
+        self.model.reset()
+        self.mgr.save()
+
+    def _show_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_app(self):
+        self._quitting = True
+        self.close()
 
     def _show_details(self, it: E.Item):
         try:
@@ -1260,8 +1343,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._add_urls(urls, "download")
 
     def closeEvent(self, e):
+        if (not self._quitting and self.tray_icon is not None and self.cfg.close_to_tray
+                and self.watcher.enabled_count() > 0):
+            e.ignore()
+            self.hide()
+            if not self._tray_hinted:
+                self._tray_hinted = True
+                self.tray_icon.showMessage(
+                    "Grabwave is still running",
+                    f"Watching {self.watcher.enabled_count()} room(s). Right-click the tray icon to quit.",
+                    QtWidgets.QSystemTrayIcon.Information, 6000)
+            return
         self.timer.stop()
         self.mgr.shutdown()
+        if self.tray_icon is not None:
+            self.tray_icon.hide()
         e.accept()
 
 
@@ -1270,6 +1366,11 @@ def main():
     # Qt 6.10+ marks invalidateFilter() deprecated; it still works and the notice only adds noise
     warnings.filterwarnings("ignore", message=".*invalidateFilter.*", category=DeprecationWarning)
     E.activate_ytdlp_update()  # use a newer downloaded yt-dlp if the user updated it (must run before any import)
+    cfg = E.Config.load()
+    E.apply_priority(cfg)
+    flags = E.perf(cfg)["chromium"]  # browser-engine flags for the chosen performance mode (before Qt starts)
+    if flags:
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "") + " " + flags).strip()
     if os.name == "nt":
         try:  # lets Windows show Grabwave's own icon on the taskbar instead of Python's
             import ctypes
@@ -1282,8 +1383,7 @@ def main():
     icon_file = resource_path("assets/grabwave.png")
     if icon_file.is_file():
         app.setWindowIcon(QtGui.QIcon(str(icon_file)))
-    app.setStyleSheet(STYLE)
-    cfg = E.Config.load()
+    app.setStyleSheet(UI.STYLE)
     mgr = E.Manager(cfg)
     w = MainWindow(mgr)
     w.show()
