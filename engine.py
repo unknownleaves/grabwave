@@ -22,6 +22,33 @@ MAX_CONCURRENT = 20  # hard cap (MeGet-style apps typically stop at 15)
 # Paths / config
 # ----------------------------------------------------------------------------
 
+
+def hide_child_windows() -> None:
+    """Windows: stop every helper process (ffmpeg, powershell, ...) from opening a console window."""
+    if os.name != "nt" or getattr(subprocess.Popen, "_gw_patched", False):
+        return
+    _orig = subprocess.Popen
+
+    class _QuietPopen(_orig):  # type: ignore[misc, valid-type]
+        _gw_patched = True
+
+        def __init__(self, *a, **kw):
+            kw["creationflags"] = kw.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
+            try:
+                si = kw.get("startupinfo") or subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = 0  # SW_HIDE
+                kw["startupinfo"] = si
+            except Exception:
+                pass
+            super().__init__(*a, **kw)
+
+    subprocess.Popen = _QuietPopen  # type: ignore[misc]
+
+
+hide_child_windows()
+
+
 def app_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -334,7 +361,7 @@ class _NoPlugin(Exception):
 # Workers
 # ----------------------------------------------------------------------------
 
-def _common_ydl_opts(cfg: Config) -> dict:
+def _common_ydl_opts(cfg: Config, use_cookies: bool = True) -> dict:
     o = {
         "quiet": True,
         "color": {"stdout": "never", "stderr": "never"},
@@ -347,10 +374,10 @@ def _common_ydl_opts(cfg: Config) -> dict:
         "concurrent_fragment_downloads": 4,
         "windowsfilenames": True,
     }
-    cf = effective_cookie_file(cfg)
+    cf = effective_cookie_file(cfg) if use_cookies else ""
     if cf:
         o["cookiefile"] = cf
-    if cfg.cookies_browser:
+    if use_cookies and cfg.cookies_browser:
         o["cookiesfrombrowser"] = (cfg.cookies_browser,)
     if cfg.proxy:
         o["proxy"] = cfg.proxy
@@ -406,26 +433,42 @@ def _make_hook(item: Item):
 
 
 def run_download(item: Item, cfg: Config) -> None:
-    """Try the page/media URL with yt-dlp first; if that fails and the browser pane captured the page's own
-    stream address (item.alt_url), download that directly. This keeps sites whose yt-dlp extractor is
-    broken (e.g. Beeg after its API change) working."""
-    try:
-        _download_once(item, cfg, item.url, item.referer, False)
-    except Exception:
-        if item.stop.is_set() or not item.alt_url:
-            raise
+    """Try the page/media URL with yt-dlp; then again without the browser cookies (stale sign-ins break some
+    sites, e.g. X/Twitter); then the stream address the browser pane captured (item.alt_url)."""
+    def reset():
         item.error = ""
         item.done = item.total = 0
         item.speed = 0.0
+
+    first = None
+    try:
+        _download_once(item, cfg, item.url, item.referer, False)
+        return
+    except Exception as ex:
+        if item.stop.is_set():
+            raise
+        first = ex
+    if effective_cookie_file(cfg) or cfg.cookies_browser:
+        reset()
+        try:
+            _download_once(item, cfg, item.url, item.referer, False, use_cookies=False)
+            return
+        except Exception:
+            if item.stop.is_set():
+                raise
+    if item.alt_url:
+        reset()
         _download_once(item, cfg, item.alt_url, item.alt_referer or item.referer or item.url, True)
+        return
+    raise first
 
 
-def _download_once(item: Item, cfg: Config, url: str, referer: str, is_alt: bool) -> None:
+def _download_once(item: Item, cfg: Config, url: str, referer: str, is_alt: bool, use_cookies: bool = True) -> None:
     import yt_dlp
 
     outdir = item.outdir or cfg.download_dir
     Path(outdir).mkdir(parents=True, exist_ok=True)
-    opts = _common_ydl_opts(cfg)
+    opts = _common_ydl_opts(cfg, use_cookies)
     opts["outtmpl"] = str(Path(outdir) / "%(title).150B [%(id)s].%(ext)s")
     if item.filename:
         opts["outtmpl"] = str(Path(outdir) / (item.filename.replace("%", "%%") + ".%(ext)s"))
@@ -490,6 +533,14 @@ def run_live_streamlink(item: Item, cfg: Config) -> None:
                 stream = camsites.open_stream(sl, item.url, cfg.live_quality, cfg.cookies_browser, cookie_file)
             except camsites.CamOffline as e:
                 why = f"offline/not public: {e}"
+            except Exception as e:  # site blocked our direct lookup: try streamlink's own plugin
+                why = f"blocked/unavailable: {str(e)[:90]}"
+                try:
+                    streams = sl.streams(item.url)
+                    if streams:
+                        stream = streams.get(cfg.live_quality) or streams.get("best")
+                except Exception:
+                    pass
         else:
             try:
                 streams = sl.streams(item.url)
