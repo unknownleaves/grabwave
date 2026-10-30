@@ -1,6 +1,6 @@
 ; Inno Setup script: turns dist\Grabwave (the PyInstaller folder) + ffmpeg into one Grabwave-Setup-<version>.exe
 #ifndef MyAppVersion
-  #define MyAppVersion "2.6"
+  #define MyAppVersion "2.7"
 #endif
 
 [Setup]
@@ -38,8 +38,15 @@ Name: "{autodesktop}\Grabwave"; Filename: "{app}\Grabwave.exe"; Tasks: desktopic
 
 [Run]
 Filename: "{app}\Grabwave.exe"; Description: "Launch Grabwave"; Flags: nowait postinstall skipifsilent
+; after an in-app update (silent install) open the new version again
+Filename: "{app}\Grabwave.exe"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [Code]
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
 // On uninstall, offer to remove settings, the download queue and browser sign-ins too.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
