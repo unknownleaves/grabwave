@@ -30,6 +30,8 @@ jobs:
         with: { name: Grabwave-Windows-exe, path: dist/Grabwave-Setup.exe }
   macos:
     runs-on: macos-latest   # Apple Silicon
+    continue-on-error: true   # GitHub's Macs are sometimes unavailable; that must not block the other downloads
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -61,7 +63,7 @@ jobs:
   release:
     # Publishes whatever built successfully as a Release (a normal download page, no zip files).
     needs: [windows, macos, linux]
-    if: ${{ !cancelled() && (needs.windows.result == 'success' || needs.macos.result == 'success' || needs.linux.result == 'success') }}
+    if: ${{ !cancelled() && (needs.windows.result == 'success' || needs.linux.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,8 +74,30 @@ jobs:
           path: out
           pattern: Grabwave-*
           merge-multiple: true
+      - name: Write latest.json (read by the in-app updater)
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          ver, repo = os.environ["VER"], os.environ["REPO"]
+          folder = Path("out")
+          notes_file = Path("release_notes.txt")
+          notes = notes_file.read_text("utf-8").strip() if notes_file.is_file() else ""
+          manifest = {"version": ver, "notes": notes}
+          names = {"windows": "Grabwave-Setup.exe", "mac": "Grabwave.dmg", "linux": "Grabwave-x86_64.AppImage"}
+          for key, name in names.items():
+              p = folder / name
+              if p.is_file():
+                  manifest[key] = {"url": f"https://github.com/{repo}/releases/download/v{ver}/{name}",
+                                   "sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "size": p.stat().st_size}
+          (folder / "latest.json").write_text(json.dumps(manifest, indent=2), "utf-8")
+          print(json.dumps(manifest, indent=2))
+          PY
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VER }}
           name: Grabwave ${{ env.VER }}
+          body_path: release_notes.txt
           files: out/*
