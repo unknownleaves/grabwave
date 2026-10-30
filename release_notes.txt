@@ -1,0 +1,5 @@
+Grabwave 2.7
+- New look: Paper Desk theme, wave progress, mascot, stamps.
+- Shelf, Watchlist (auto-record when a room goes live), smart paste, Performance modes.
+- Updates: Grabwave now offers new versions when it opens (Help menu > Check for updates).
+- Fixes: hidden helper windows, long file names, X links, automatic page capture fallback.
