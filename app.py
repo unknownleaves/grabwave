@@ -19,11 +19,11 @@ from PySide6.QtCore import Qt
 import engine as E
 import ui_extra as UI
 
-VERSION = "2.0"
+VERSION = "2.6"
 import camsites
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
-    from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript
+    from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
     HAVE_WEB = True
 except Exception:  # pragma: no cover
@@ -143,6 +143,24 @@ def resource_path(rel: str) -> Path:
     return base / rel
 
 
+SNIFF_SKIP = ("preview", "thumb", "trailer", "sprite", "teaser", "poster", "doubleclick", "adserver", "/ads/")
+NO_AUTO_CAPTURE = ("youtube.com", "youtu.be", "youtube-nocookie.com", "google.com", "x.com", "twitter.com")
+
+
+def pick_best_media(urls: list) -> str:
+    """The stream address most likely to be the video: a master playlist, else the first playlist, else the
+    latest direct file."""
+    def ext(u): return u.lower().split("?")[0]
+    pls = [u for u in urls if ext(u).endswith(".m3u8")]
+    if pls:
+        masters = [u for u in pls if "master" in u.lower()]
+        return (masters or pls)[0]
+    mpd = [u for u in urls if ext(u).endswith(".mpd")]
+    if mpd:
+        return mpd[0]
+    return urls[-1] if urls else ""
+
+
 def is_blocked_host(url: str) -> bool:
     from urllib.parse import urlparse
     host = (urlparse(url).hostname or "").lower()
@@ -192,6 +210,74 @@ if HAVE_WEB:
                 return
             super().javaScriptConsoleMessage(level, message, line, source)
 
+    class PageSniffer(QtCore.QObject):
+        """Opens a page invisibly (with the browser pane's sign-ins), presses play, and reports the stream
+        address the page loads. Used automatically when a link can't be downloaded the normal way."""
+        finished = QtCore.Signal(str)
+
+        def __init__(self, profile, url: str, parent=None):
+            super().__init__(parent)
+            self.found: list = []
+            self.n = 0
+            self.view = QWebEngineView()
+            page = MediaPage(profile, self.view)
+            page.sniffed.connect(self._seen)
+            script = QWebEngineScript()
+            script.setName("grabwave-detector")
+            script.setSourceCode(DETECTOR_JS)
+            script.setInjectionPoint(QWebEngineScript.DocumentReady)
+            script.setWorldId(QWebEngineScript.MainWorld)
+            script.setRunsOnSubFrames(True)
+            page.scripts().insert(script)
+            try:
+                page.settings().setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, False)
+            except Exception:
+                pass
+            self.view.setPage(page)
+            self.view.resize(1280, 720)
+            self.view.setAttribute(Qt.WA_DontShowOnScreen, True)
+            self.view.show()
+            self.view.load(QtCore.QUrl(url))
+            self.timer = QtCore.QTimer(self)
+            self.timer.timeout.connect(self._step)
+            self.timer.start(1000)
+
+        def _seen(self, u: str):
+            if any(w in u.lower() for w in SNIFF_SKIP):
+                return
+            if u not in self.found:
+                self.found.append(u)
+
+        def _step(self):
+            self.n += 1
+            try:
+                self.view.page().runJavaScript(
+                    "document.querySelectorAll('video').forEach(function(v){v.muted=true;"
+                    "if(v.play){var p=v.play();if(p&&p.catch){p.catch(function(){});}}});"
+                    "var b=document.querySelector('.vjs-big-play-button,.play-button,.big-play-button,"
+                    "button[aria-label*=\"lay\"]');if(b){b.click();}"
+                    # also read plain video addresses straight from the page (file-hosting sites)
+                    "document.querySelectorAll('video,source,meta[property=\"og:video\"],"
+                    "meta[property=\"og:video:url\"],a[href*=\".mp4\"],a[href*=\".m3u8\"],"
+                    "a[href*=\".webm\"]').forEach(function(e){var u=e.currentSrc||e.src||e.content||e.href;"
+                    "if(u&&/^https?:/.test(u)&&/\\.(mp4|m3u8|webm|m4v|mpd)([?#]|$)/i.test(u)){"
+                    "console.log('GRABWAVE-SNIFF:'+u);}});")
+            except Exception:
+                pass
+            if (self.found and self.n >= 5) or self.n >= 25:
+                self.stop(True)
+
+        def stop(self, emit: bool = True):
+            self.timer.stop()
+            best = pick_best_media(self.found)
+            try:
+                self.view.setPage(None)
+            except Exception:
+                pass
+            self.view.deleteLater()
+            if emit:
+                self.finished.emit(best)
+
 ACCENT, RED, GRAY = UI.ACCENT, UI.RED, UI.GRAY
 
 
@@ -225,27 +311,32 @@ class BrowserPane(QtWidgets.QWidget):
         lay.setSpacing(0)
 
         bar = QtWidgets.QHBoxLayout()
-        bar.setContentsMargins(8, 8, 8, 8)
-        bar.setSpacing(2)
+        bar.setContentsMargins(18, 8, 18, 8)
+        bar.setSpacing(4)
 
-        def btn(glyph, tip, slot):
+        def btn(glyph, tip, slot, kind="nav"):
             b = QtWidgets.QToolButton()
-            b.setText(glyph)
+            b.setObjectName(kind)
+            b.setIcon(UI.icon(glyph, "#ffffff" if kind == "grab" else UI.MUTED, 20))
+            b.setIconSize(QtCore.QSize(20, 20))
+            b.setFixedSize(36, 36)
             b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(slot)
             bar.addWidget(b)
             return b
 
-        self.b_home = btn("⌂", "Home", self.go_home)
-        self.b_back = btn("←", "Back", lambda: self.web and self.web.back())
-        self.b_fwd = btn("→", "Forward", lambda: self.web and self.web.forward())
-        self.b_reload = btn("⟳", "Reload", lambda: self.web and self.web.reload())
+        self.b_home = btn("home", "Home", self.go_home)
+        self.b_back = btn("back", "Back", lambda: self.web and self.web.back())
+        self.b_fwd = btn("forward", "Forward", lambda: self.web and self.web.forward())
+        self.b_reload = btn("reload", "Reload", lambda: self.web and self.web.reload())
         self.url = QtWidgets.QLineEdit()
+        self.url.setObjectName("urlbar")
         self.url.setPlaceholderText("Search or enter a web address")
         self.url.returnPressed.connect(lambda: self.navigate(self.url.text()))
         bar.addWidget(self.url, 1)
-        self.b_add = btn("⬇", "Add this page to downloads", self._emit_add)
-        self.b_ext = btn("↗", "Open in your default browser", self._open_external)
+        self.b_add = btn("download", "Grab the video on this page", self._emit_add, "grab")
+        self.b_ext = btn("external", "Open in your default browser", self._open_external)
         lay.addLayout(bar)
 
         self.stack = QtWidgets.QStackedWidget()
@@ -263,6 +354,10 @@ class BrowserPane(QtWidgets.QWidget):
             self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
             import re
             self.profile.setHttpUserAgent(re.sub(r"\s*QtWebEngine/[\d.]+", "", self.profile.httpUserAgent()))
+            try:  # let the recorder use the same User-Agent as this browser
+                (E.config_dir() / "browser_ua.txt").write_text(self.profile.httpUserAgent(), "utf-8")
+            except OSError:
+                pass
             self.web = MediaView()
             self.web.mediaRequested.connect(self.mediaFound.emit)
             self.web.linkRequested.connect(self.addRequested.emit)
@@ -331,30 +426,18 @@ class BrowserPane(QtWidgets.QWidget):
             self.addRequested.emit(u)
 
     # --- stream sniffing ------------------------------------------------------
-    _SKIP = ("preview", "thumb", "trailer", "sprite", "teaser", "poster", "doubleclick", "adserver", "/ads/")
-
     def _on_sniff(self, url: str, first_party: str):
         low = url.lower()
-        if is_blocked_host(first_party) or any(w in low for w in self._SKIP):
+        if is_blocked_host(first_party) or any(w in low for w in SNIFF_SKIP):
             return
         if url not in self.sniffed:
             self.sniffed.append(url)
             del self.sniffed[:-40]
 
     def best_media(self) -> str:
-        """The stream address most likely to be the video: a master playlist, else the first playlist, else the
-        latest direct file."""
         if self.web is None:
             return ""
-        def ext(u): return u.lower().split("?")[0]
-        pls = [u for u in self.sniffed if ext(u).endswith(".m3u8")]
-        if pls:
-            masters = [u for u in pls if "master" in u.lower()]
-            return (masters or pls)[0]
-        mpd = [u for u in self.sniffed if ext(u).endswith(".mpd")]
-        if mpd:
-            return mpd[0]
-        return self.sniffed[-1] if self.sniffed else ""
+        return pick_best_media(self.sniffed)
 
     def _on_media(self, info: dict):
         info = dict(info)
@@ -678,6 +761,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._seen_running: set = set()
         self._announced: set = {i.id for i in mgr.items if i.status in ("Completed", "Failed")}
         self._tick_n = 0
+        self._auto_tried: set = set()
+        self._sniffers: list = []
 
         self.thumbs = UI.ThumbCache(self.cfg)
         self.thumbs.ready.connect(lambda _id: self.view.viewport().update())
@@ -772,7 +857,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mascot = UI.Wavy("sleepy", 34)
         h.addWidget(self.mascot)
         gear = QtWidgets.QToolButton()
-        gear.setText("⚙")
+        gear.setIcon(UI.icon("sliders", UI.MUTED, 20))
+        gear.setIconSize(QtCore.QSize(20, 20))
         gear.setToolTip("Settings")
         gear.clicked.connect(self._settings)
         h.addWidget(gear)
@@ -815,11 +901,11 @@ class MainWindow(QtWidgets.QMainWindow):
         head.addStretch(1)
 
         add = QtWidgets.QToolButton()
-        add.setText("+")
+        add.setIcon(UI.icon("plus", UI.ACCENT, 18))
         add.setToolTip("Paste the link you copied and start downloading")
         add.clicked.connect(lambda: self._add_from_clipboard(True))
         more = QtWidgets.QToolButton()
-        more.setText("▾")
+        more.setIcon(UI.icon("chevron", UI.MUTED, 16))
         more.setToolTip("More ways to add")
         more.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         m = QtWidgets.QMenu(more)
@@ -838,7 +924,7 @@ class MainWindow(QtWidgets.QMainWindow):
         b.clicked.connect(self._pause_all)
         head.addWidget(b)
         trash = QtWidgets.QToolButton()
-        trash.setText("🗑")
+        trash.setIcon(UI.icon("trash", UI.MUTED, 18))
         trash.setToolTip("Remove selected (or everything in this list)")
         trash.clicked.connect(self._trash)
         head.addWidget(trash)
@@ -904,13 +990,14 @@ class MainWindow(QtWidgets.QMainWindow):
         opts.addWidget(lb)
         self.loc = QtWidgets.QLineEdit(self.cfg.download_dir)
         self.loc.setReadOnly(True)
+        self.loc.setObjectName("path")
         opts.addWidget(self.loc, 1)
         b = QtWidgets.QPushButton("Change")
         b.setObjectName("small")
         b.clicked.connect(self._change_dir)
         opts.addWidget(b)
         fb = QtWidgets.QToolButton()
-        fb.setText("📁")
+        fb.setIcon(UI.icon("folder", UI.MUTED, 18))
         fb.setToolTip("Open folder")
         fb.clicked.connect(self._open_dir)
         opts.addWidget(fb)
@@ -1016,11 +1103,45 @@ class MainWindow(QtWidgets.QMainWindow):
                         QtWidgets.QApplication.beep()
                 elif it.status == "Failed":
                     self._announced.add(it.id)
-                    self.statusBar().showMessage("One didn't work. Right-click it in the tray for details.", 6000)
+                    if not self._auto_capture(it):
+                        self.statusBar().showMessage("One didn't work. Right-click it in the tray for details.", 6000)
         if self.pages.currentIndex() == 1 and self._tick_n % 2 == 0:
             self.shelf.refresh()
         elif self.pages.currentIndex() == 2:
             self.watch.refresh_status()
+
+    # --- automatic "open the page and capture the stream" fallback ----------------
+    def _auto_capture(self, it: E.Item) -> bool:
+        """When the normal download fails, quietly open the page, press play and record the stream it loads."""
+        from urllib.parse import urlparse
+        if not HAVE_WEB or it.kind != "download" or it.alt_url or it.id in self._auto_tried:
+            return False
+        if not it.url.lower().startswith(("http://", "https://")) or is_blocked_host(it.url):
+            return False
+        host = (urlparse(it.url).hostname or "").lower()
+        if any(host == h or host.endswith("." + h) for h in NO_AUTO_CAPTURE):
+            return False
+        self._auto_tried.add(it.id)
+        it.status = "Retrying"
+        sn = PageSniffer(self.browser.profile, it.url, self)
+        self._sniffers.append(sn)
+        sn.finished.connect(lambda best, i=it, s=sn: self._on_capture(i, best, s))
+        return True
+
+    def _on_capture(self, it: E.Item, best: str, sn):
+        if sn in self._sniffers:
+            self._sniffers.remove(sn)
+        sn.deleteLater()
+        if best:
+            it.alt_url, it.alt_referer = best, it.url
+            it.error = ""
+            it.status = "Queued"
+            self.statusBar().showMessage("Found the video on the page. Trying again…", 5000)
+        else:
+            it.status = "Failed"
+            it.error += ("\n\nGrabwave also opened the page itself and found no video stream. If the video needs "
+                         "a sign-in or a click, open it in the Browse tab, start it, then click the download button.")
+            self.statusBar().showMessage("Couldn't find a video on that page.", 6000)
 
     # --- clipboard / smart paste -------------------------------------------
     def _clipboard_urls(self) -> list:
@@ -1383,7 +1504,7 @@ def main():
     icon_file = resource_path("assets/grabwave.png")
     if icon_file.is_file():
         app.setWindowIcon(QtGui.QIcon(str(icon_file)))
-    app.setStyleSheet(UI.STYLE)
+    app.setStyleSheet(UI.build_style())
     mgr = E.Manager(cfg)
     w = MainWindow(mgr)
     w.show()
