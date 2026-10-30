@@ -405,6 +405,8 @@ class Item:
         for k, v in d.items():
             if hasattr(it, k):
                 setattr(it, k, v)
+        if it.status == "Retrying":
+            it.status = "Failed"
         if it.status in RUNNING_STATES:  # app was closed while running
             it.status = "Stopped" if it.kind == "download" else "Completed"
             if it.kind == "download":
@@ -436,6 +438,7 @@ def _common_ydl_opts(cfg: Config, use_cookies: bool = True, quality: str = "") -
         "fragment_retries": 10,
         "concurrent_fragment_downloads": perf(cfg)["frags"],
         "windowsfilenames": True,
+        "trim_file_name": 140,
     }
     cf = effective_cookie_file(cfg) if use_cookies else ""
     if cf:
@@ -503,6 +506,18 @@ def _make_hook(item: Item):
     return hook
 
 
+def _normalize_url(url: str) -> str:
+    """X/Twitter share links often end in /video/1 or /photo/1, which can make yt-dlp say 'Video #1 is
+    unavailable'. The plain tweet address works for every video in the post."""
+    import re
+    p = urlparse(url)
+    host = (p.hostname or "").lower()
+    if host.endswith(("x.com", "twitter.com", "fxtwitter.com", "vxtwitter.com")):
+        path = re.sub(r"/(video|photo)/\d+/?$", "", p.path)
+        return f"{p.scheme}://{p.netloc}{path}"
+    return url
+
+
 def run_download(item: Item, cfg: Config) -> None:
     """Try the page/media URL with yt-dlp; then again without the browser cookies (stale sign-ins break some
     sites, e.g. X/Twitter); then the stream address the browser pane captured (item.alt_url)."""
@@ -512,8 +527,9 @@ def run_download(item: Item, cfg: Config) -> None:
         item.speed = 0.0
 
     first = None
+    url = _normalize_url(item.url)
     try:
-        _download_once(item, cfg, item.url, item.referer, False)
+        _download_once(item, cfg, url, item.referer, False)
         return
     except Exception as ex:
         if item.stop.is_set():
@@ -522,7 +538,7 @@ def run_download(item: Item, cfg: Config) -> None:
     if effective_cookie_file(cfg) or cfg.cookies_browser:
         reset()
         try:
-            _download_once(item, cfg, item.url, item.referer, False, use_cookies=False)
+            _download_once(item, cfg, url, item.referer, False, use_cookies=False)
             return
         except Exception:
             if item.stop.is_set():
@@ -540,7 +556,7 @@ def _download_once(item: Item, cfg: Config, url: str, referer: str, is_alt: bool
     outdir = item.outdir or cfg.download_dir
     Path(outdir).mkdir(parents=True, exist_ok=True)
     opts = _common_ydl_opts(cfg, use_cookies, item.quality)
-    opts["outtmpl"] = str(Path(outdir) / "%(title).150B [%(id)s].%(ext)s")
+    opts["outtmpl"] = str(Path(outdir) / "%(title).110B [%(id).24B].%(ext)s")  # short: Windows paths max out at 260
     if item.filename:
         opts["outtmpl"] = str(Path(outdir) / (item.filename.replace("%", "%%") + ".%(ext)s"))
     if referer:
@@ -615,6 +631,34 @@ def check_live(url: str, cfg: Config) -> bool:
         return False
 
 
+def browser_ua() -> str:
+    """The built-in browser's User-Agent (saved by the browser pane), so recordings look like the same visitor."""
+    try:
+        t = (config_dir() / "browser_ua.txt").read_text("utf-8").strip()
+        if t:
+            return t
+    except Exception:
+        pass
+    import camsites
+    return camsites.UA
+
+
+def _open_alt_hls(sl, url: str, referer: str, quality: str):
+    """Open the playlist the browser pane captured, sending the same Referer/Origin/User-Agent."""
+    from streamlink.stream.hls import HLSStream
+    import camsites
+    p = urlparse(referer)
+    headers = {"Referer": referer, "User-Agent": browser_ua()}
+    if p.scheme and p.netloc:
+        headers["Origin"] = f"{p.scheme}://{p.netloc}"
+    sl.set_option("http-headers", headers)
+    if ".m3u8" in url.lower():
+        streams = HLSStream.parse_variant_playlist(sl, url, headers=headers)
+        if streams:
+            return camsites._pick(dict(streams), quality)
+    return HLSStream(sl, url, headers=headers)
+
+
 def run_live_streamlink(item: Item, cfg: Config) -> None:
     from streamlink import Streamlink
     from streamlink.exceptions import NoPluginError, PluginError
@@ -634,14 +678,28 @@ def run_live_streamlink(item: Item, cfg: Config) -> None:
                 stream = camsites.open_stream(sl, item.url, cfg.live_quality, cfg.cookies_browser, cookie_file)
             except camsites.CamOffline as e:
                 why = f"offline/not public: {e}"
-            except Exception as e:  # site blocked our direct lookup: try streamlink's own plugin
-                why = f"blocked/unavailable: {str(e)[:90]}"
-                try:
-                    streams = sl.streams(item.url)
-                    if streams:
-                        stream = streams.get(cfg.live_quality) or streams.get("best")
-                except Exception:
-                    pass
+            except Exception as e:  # site blocked our direct lookup (e.g. Stripchat HTTP 418)
+                why = f"blocked by the site: {str(e)[:70]}"
+                # 1) the stream address the built-in browser saw while the room was playing
+                if item.alt_url:
+                    try:
+                        stream = _open_alt_hls(sl, item.alt_url, item.alt_referer or item.url, cfg.live_quality)
+                    except Exception as e2:  # noqa: BLE001
+                        why = f"saved stream address failed: {str(e2)[:60]}"
+                # 2) streamlink's own plugin
+                if stream is None:
+                    try:
+                        streams = sl.streams(item.url)
+                        if streams:
+                            stream = streams.get(cfg.live_quality) or streams.get("best")
+                    except Exception:
+                        pass
+                if stream is None and not item.alt_url:
+                    item.error = ("The site refused Grabwave's direct lookup (HTTP 418 means it blocks automated "
+                                  "requests).\n\nWorkaround: open the room in the Browse tab, sign in if the site "
+                                  "asks, let the video start playing, then click the download button (top right "
+                                  "of the browser bar). Grabwave then records the exact stream your browser is "
+                                  "playing.")
         else:
             try:
                 streams = sl.streams(item.url)
@@ -791,7 +849,13 @@ def _worker(item: Item, cfg: Config) -> None:
         else:
             item.status = "Failed"
             item.error = _ANSI.sub("", str(e))[:3000]
-            if "beeg." in item.url.lower() and not item.alt_url:
+            low = item.url.lower()
+            if ("x.com/" in low or "twitter.com/" in low) and not item.alt_url:
+                item.error += ("\n\nHint: X shows many videos only to signed-in accounts (adult/sensitive posts, "
+                               "age-restricted posts). In the Browse tab open x.com, sign in once, then add the "
+                               "link again. Grabwave reuses that sign-in. Posts that were deleted, or are from a "
+                               "private account you don't follow, can't be downloaded.")
+            if "beeg." in low and not item.alt_url:
                 item.error += ("\n\nHint: Beeg changed its site and yt-dlp can't read it from the link alone. "
                                "Open the video in the built-in browser, let it start loading, then click the "
                                "Download button on the page (or the address-bar download button).")
