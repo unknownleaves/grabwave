@@ -18,8 +18,9 @@ from PySide6.QtCore import Qt
 
 import engine as E
 import ui_extra as UI
+import updater as U
 
-VERSION = "2.6"
+VERSION = "2.7"
 import camsites
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
@@ -635,6 +636,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.tray_cb = QtWidgets.QCheckBox("Keep running in the system tray when I close the window (needed for the watchlist)")
         self.tray_cb.setChecked(cfg.close_to_tray)
         form.addRow("", self.tray_cb)
+        self.upd = QtWidgets.QCheckBox("Check for updates when Grabwave opens")
+        self.upd.setChecked(cfg.check_updates)
+        form.addRow("", self.upd)
         self.sounds = QtWidgets.QCheckBox("Play a sound when something finishes")
         self.sounds.setChecked(cfg.sounds)
         form.addRow("", self.sounds)
@@ -720,6 +724,7 @@ class SettingsDialog(QtWidgets.QDialog):
         c.max_concurrent = self.maxc.value()
         c.performance = next((n for n, rb in self.perf_radios.items() if rb.isChecked()), "Balanced")
         c.smart_paste, c.close_to_tray, c.sounds = self.smart.isChecked(), self.tray_cb.isChecked(), self.sounds.isChecked()
+        c.check_updates = self.upd.isChecked()
         c.live_quality = self.quality.text().strip() or "best"
         c.live_poll_seconds = self.poll.value()
         c.remux_mp4 = self.remux.isChecked()
@@ -746,6 +751,7 @@ class TrayView(QtWidgets.QListView):
 
 class MainWindow(QtWidgets.QMainWindow):
     toolFinished = QtCore.Signal(object, str, str)  # source item, new file, error text
+    updateChecked = QtCore.Signal(object, str, bool)  # update entry or None, error text, asked by the user
 
     def __init__(self, mgr: E.Manager):
         super().__init__()
@@ -769,6 +775,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.watcher = UI.Watcher(mgr, self.cfg)
         self.watcher.wentLive.connect(self._went_live)
         self.toolFinished.connect(self._on_tool)
+        self.updateChecked.connect(self._on_update_checked)
+        self._update_open = False
 
         central = QtWidgets.QWidget()
         central.setObjectName("page")
@@ -828,6 +836,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tick()
         urls = self._clipboard_urls()  # a link already on the clipboard: show it in the paste bar
         self.browser.home.set_clipboard_url(urls[0] if urls else "")
+        if self.cfg.check_updates:  # a few seconds after opening, quietly look for a newer version
+            QtCore.QTimer.singleShot(4000, lambda: self._check_updates(False))
 
     # --- header and tray ---------------------------------------------------
     def _build_header(self) -> QtWidgets.QWidget:
@@ -856,6 +866,18 @@ class MainWindow(QtWidgets.QMainWindow):
         h.addStretch(1)
         self.mascot = UI.Wavy("sleepy", 34)
         h.addWidget(self.mascot)
+        helpb = QtWidgets.QToolButton()
+        helpb.setIcon(UI.icon("help", UI.MUTED, 20))
+        helpb.setIconSize(QtCore.QSize(20, 20))
+        helpb.setToolTip("Help")
+        helpb.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        hm = QtWidgets.QMenu(helpb)
+        hm.addAction("Check for updates…", lambda: self._check_updates(True))
+        hm.addSeparator()
+        hm.addAction("About Grabwave", self._about)
+        hm.addAction("Open the settings folder", lambda: open_path(str(E.config_dir())))
+        helpb.setMenu(hm)
+        h.addWidget(helpb)
         gear = QtWidgets.QToolButton()
         gear.setIcon(UI.icon("sliders", UI.MUTED, 20))
         gear.setIconSize(QtCore.QSize(20, 20))
@@ -1388,6 +1410,52 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mgr.save()
         self.shelf.refresh(force=True)
         self.splash.play(new.title, "is on your shelf.", self.tray.y())
+
+    # --- updates ---------------------------------------------------------------
+    def _check_updates(self, manual: bool):
+        import threading
+
+        def work():
+            try:
+                self.updateChecked.emit(U.check(VERSION, self.cfg.update_url, self.cfg.proxy), "", manual)
+            except Exception as e:  # noqa: BLE001
+                self.updateChecked.emit(None, str(e), manual)
+
+        if manual:
+            self.statusBar().showMessage("Checking for updates…", 4000)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_checked(self, entry, err: str, manual: bool):
+        if err:
+            if manual:
+                QtWidgets.QMessageBox.information(self, "Check for updates",
+                                                  f"Couldn't check for updates right now.\n\n{err}")
+            return
+        if entry is None:
+            if manual:
+                QtWidgets.QMessageBox.information(self, "Check for updates",
+                                                  f"You're up to date. Grabwave {VERSION} is the newest version.")
+            return
+        if self._update_open or not self.isVisible():
+            return
+        self._update_open = True
+        dlg = UI.UpdateDialog(self, entry, VERSION, self.cfg.proxy, self.mgr.active_count())
+        dlg.quitRequested.connect(self._quit_app)
+        dlg.exec()
+        self._update_open = False
+
+    def _about(self):
+        try:
+            import yt_dlp
+            engine = f"yt-dlp {yt_dlp.version.__version__}"
+        except Exception:
+            engine = "yt-dlp not found"
+        QtWidgets.QMessageBox.about(
+            self, "About Grabwave",
+            f"<h3>Grabwave {VERSION}</h3><p>Download videos and record live streams.</p>"
+            f"<p style='color:#6b6458'>{engine}<br>ffmpeg: {E.find_ffmpeg() or 'not found'}</p>"
+            "<p style='color:#6b6458'>Built with Qt, yt-dlp, streamlink and ffmpeg. "
+            "See THIRD_PARTY.md for their licenses.</p>")
 
     # --- watchlist / tray icon ----------------------------------------------------
     def _went_live(self, name: str):
