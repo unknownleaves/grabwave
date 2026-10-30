@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt
 
 import engine as E
 
-VERSION = "1.7"
+VERSION = "1.8"
 import camsites
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
@@ -43,6 +43,20 @@ DETECTOR_JS = r"""
   var host = location.hostname;
   for (var i = 0; i < BLOCKED.length; i++) {
     if (host === BLOCKED[i] || host.endsWith("." + BLOCKED[i])) return;
+  }
+  if (!/(^|\.)(youtube\.com|youtube-nocookie\.com|googlevideo\.com|google\.com|x\.com|twitter\.com)$/i.test(host)) {
+    try {
+      var seenU = {};
+      var po = new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function (en) {
+          var p = en.name.split("#")[0].split("?")[0].toLowerCase();
+          if (/\.(m3u8|mpd|mp4|webm|m4v)$/.test(p) && !seenU[en.name]) {
+            seenU[en.name] = 1; console.log("GRABWAVE-SNIFF:" + en.name);
+          }
+        });
+      });
+      po.observe({ type: "resource", buffered: true });
+    } catch (err) {}
   }
   var btn = null;
   function currentMedia() {
@@ -159,28 +173,15 @@ if HAVE_WEB:
                     menu.addAction("Add this link to Grabwave downloads", lambda u=link: self.linkRequested.emit(u))
             menu.popup(event.globalPos())
 
-    from PySide6.QtWebEngineCore import QWebEngineUrlRequestInterceptor
-
-    class MediaSniffer(QWebEngineUrlRequestInterceptor):
-        """Notes video/stream addresses the page itself requests (e.g. an .m3u8 playlist), even when the
-        built-in browser cannot play the video. Used as a fallback when a site's extractor is broken."""
-        seen = QtCore.Signal(str, str)
-
-        def interceptRequest(self, info):
-            try:
-                u = info.requestUrl().toString()
-                path = u.lower().split("#")[0].split("?")[0]
-                if path.endswith((".m3u8", ".mpd", ".mp4", ".webm", ".m4v")):
-                    self.seen.emit(u, info.firstPartyUrl().toString())
-            except Exception:
-                pass
-
-
     class MediaPage(QWebEnginePage):
         """Web page that listens for the detector script's console messages."""
         mediaFound = QtCore.Signal(dict)
+        sniffed = QtCore.Signal(str)
 
         def javaScriptConsoleMessage(self, level, message, line, source):
+            if message.startswith("GRABWAVE-SNIFF:"):
+                self.sniffed.emit(message[len("GRABWAVE-SNIFF:"):])
+                return
             if message.startswith("GRABWAVE:"):
                 import json
                 try:
@@ -378,10 +379,8 @@ class BrowserPane(QtWidgets.QWidget):
             self.web.linkRequested.connect(self.addRequested.emit)
             page = MediaPage(self.profile, self.web)
             page.mediaFound.connect(self._on_media)
+            page.sniffed.connect(lambda u: self._on_sniff(u, self.current_url()))
             self.sniffed: list[str] = []
-            self.sniffer = MediaSniffer(self)
-            self.sniffer.seen.connect(self._on_sniff)
-            self.profile.setUrlRequestInterceptor(self.sniffer)
             self.web.loadStarted.connect(self.sniffed.clear)
             script = QWebEngineScript()
             script.setName("grabwave-detector")
