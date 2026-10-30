@@ -274,6 +274,13 @@ class Config:
     live_quality: str = "best"
     remux_mp4: bool = True
     live_poll_seconds: int = 30
+    performance: str = "Balanced"      # Maximum / Balanced / Light
+    watchlist: list = field(default_factory=list)  # [{"url","name","enabled","limit_min","limit_mb"}]
+    watch_every: int = 120             # seconds between watchlist checks
+    close_to_tray: bool = True         # keep running in the tray while the watchlist is on
+    smart_paste: bool = True           # offer to grab links copied anywhere
+    sounds: bool = True
+    tray_collapsed: bool = False
 
     @staticmethod
     def path() -> Path:
@@ -297,6 +304,56 @@ class Config:
         self.path().write_text(json.dumps(asdict(self), indent=2), "utf-8")
 
 
+
+# ----------------------------------------------------------------------------
+# Performance modes (Settings > Performance)
+# ----------------------------------------------------------------------------
+
+PERFORMANCE = {
+    # slots: most simultaneous jobs; frags: parallel pieces per download; tick: window refresh (ms);
+    # threads: ffmpeg threads (0 = all); thumbs: background picture loaders; prio: process priority;
+    # chromium: extra flags for the built-in browser (take effect after a restart)
+    "Maximum": dict(slots=MAX_CONCURRENT, frags=8, tick=250, threads=0, thumbs=4, prio="high", chromium=""),
+    "Balanced": dict(slots=10, frags=4, tick=500, threads=2, thumbs=2, prio="normal",
+                     chromium="--renderer-process-limit=4"),
+    "Light": dict(slots=3, frags=1, tick=1000, threads=1, thumbs=1, prio="low",
+                  chromium="--disable-gpu --disable-smooth-scrolling --renderer-process-limit=2 "
+                           "--disable-background-timer-throttling=false"),
+}
+PERFORMANCE_NOTES = {
+    "Maximum": "Uses everything it needs: up to 20 jobs at once, fast pieces, and a smooth, quick window. "
+               "Best on a modern computer. Other programs may feel slower during big batches.",
+    "Balanced": "A good mix: up to 10 jobs at once and normal priority. Recommended for most people.",
+    "Light": "Gentle on your computer: up to 3 jobs at once, one piece at a time, low priority and a lighter "
+             "browser. Good for older laptops or when you are working in other programs.",
+}
+
+
+def perf(cfg: "Config") -> dict:
+    return PERFORMANCE.get(cfg.performance, PERFORMANCE["Balanced"])
+
+
+def effective_slots(cfg: "Config") -> int:
+    return max(1, min(cfg.max_concurrent, perf(cfg)["slots"]))
+
+
+def apply_priority(cfg: "Config") -> None:
+    """Ask the operating system to run Grabwave at the chosen priority."""
+    level = perf(cfg)["prio"]
+    try:
+        if os.name == "nt":
+            import ctypes
+            cls = {"high": 0x00008000, "normal": 0x00000020, "low": 0x00004000}[level]  # ABOVE/NORMAL/BELOW
+            ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), cls)
+        else:
+            want = {"high": 0, "normal": 0, "low": 10}[level]
+            cur = os.nice(0)
+            if want > cur:  # unprivileged processes can only become nicer
+                os.nice(want - cur)
+    except Exception:
+        pass
+
+
 # ----------------------------------------------------------------------------
 # Items
 # ----------------------------------------------------------------------------
@@ -314,6 +371,11 @@ class Item:
         self.filename = ""  # preferred file name (without extension)
         self.alt_url = ""      # stream address the browser pane saw the page request; tried if the page URL fails
         self.alt_referer = ""  # page that requested it (sent as Referer/Origin)
+        self.thumb = ""        # thumbnail address reported by the site
+        self.duration = 0      # seconds, when known
+        self.quality = ""      # per-item quality override ("" = use the main setting)
+        self.limit_min = 0     # live: stop recording after this many minutes (0 = no limit)
+        self.limit_mb = 0      # live: stop after this many MB (0 = no limit)
         self.title = url
         self.status = "Queued"
         self.done = 0
@@ -333,7 +395,8 @@ class Item:
 
     def to_json(self) -> dict:
         keys = ("id", "url", "kind", "outdir", "referer", "filename", "title", "status", "done", "total",
-                "path", "error", "added", "alt_url", "alt_referer")
+                "path", "error", "added", "alt_url", "alt_referer", "thumb", "duration", "quality",
+                "limit_min", "limit_mb")
         return {k: getattr(self, k) for k in keys}
 
     @classmethod
@@ -361,7 +424,7 @@ class _NoPlugin(Exception):
 # Workers
 # ----------------------------------------------------------------------------
 
-def _common_ydl_opts(cfg: Config, use_cookies: bool = True) -> dict:
+def _common_ydl_opts(cfg: Config, use_cookies: bool = True, quality: str = "") -> dict:
     o = {
         "quiet": True,
         "color": {"stdout": "never", "stderr": "never"},
@@ -371,7 +434,7 @@ def _common_ydl_opts(cfg: Config, use_cookies: bool = True) -> dict:
         "continuedl": True,
         "retries": 10,
         "fragment_retries": 10,
-        "concurrent_fragment_downloads": 4,
+        "concurrent_fragment_downloads": perf(cfg)["frags"],
         "windowsfilenames": True,
     }
     cf = effective_cookie_file(cfg) if use_cookies else ""
@@ -386,7 +449,8 @@ def _common_ydl_opts(cfg: Config, use_cookies: bool = True) -> dict:
         o["ffmpeg_location"] = str(Path(ff).parent)
 
     # format / quality chosen in the main window
-    q = cfg.quality[:-1] if cfg.quality.endswith("p") else ""
+    qual = quality or cfg.quality
+    q = qual[:-1] if qual.endswith("p") else ""
     h = int(q) if q.isdigit() else None
     fmt = (cfg.fmt or "MP4").split()[0].lower()
     if fmt == "mp3":
@@ -398,6 +462,9 @@ def _common_ydl_opts(cfg: Config, use_cookies: bool = True) -> dict:
     else:
         # without ffmpeg we can't merge separate video+audio, so ask for single-file formats
         o["format"] = f"best[height<={h}]/best" if h else "best"
+    th = perf(cfg)["threads"]
+    if th:
+        o["postprocessor_args"] = {"ffmpeg": ["-threads", str(th)]}
     code = SUBTITLE_CODES.get(cfg.subtitle)
     if code:
         o["writesubtitles"] = True
@@ -420,6 +487,10 @@ def _make_hook(item: Item):
         info = d.get("info_dict") or {}
         if info.get("title") and item.title == item.url:
             item.title = info["title"]
+        if info.get("thumbnail") and not item.thumb:
+            item.thumb = info["thumbnail"]
+        if info.get("duration") and not item.duration:
+            item.duration = int(info["duration"])
         item._tmp = d.get("tmpfilename") or item._tmp
         item._final = d.get("filename") or item._final
         if d.get("status") == "downloading":
@@ -468,7 +539,7 @@ def _download_once(item: Item, cfg: Config, url: str, referer: str, is_alt: bool
 
     outdir = item.outdir or cfg.download_dir
     Path(outdir).mkdir(parents=True, exist_ok=True)
-    opts = _common_ydl_opts(cfg, use_cookies)
+    opts = _common_ydl_opts(cfg, use_cookies, item.quality)
     opts["outtmpl"] = str(Path(outdir) / "%(title).150B [%(id)s].%(ext)s")
     if item.filename:
         opts["outtmpl"] = str(Path(outdir) / (item.filename.replace("%", "%%") + ".%(ext)s"))
@@ -500,9 +571,9 @@ def _channel_name(url: str) -> str:
     return safe or "stream"
 
 
-def run_live_streamlink(item: Item, cfg: Config) -> None:
+def _new_session(cfg: Config):
+    """A streamlink session with ffmpeg, proxy and the browser pane's sign-ins applied."""
     from streamlink import Streamlink
-    from streamlink.exceptions import NoPluginError, PluginError
 
     sl = Streamlink()
     ff = find_ffmpeg()
@@ -520,6 +591,36 @@ def run_live_streamlink(item: Item, cfg: Config) -> None:
                 sl.http.cookies.set_cookie(c)
         except Exception:
             pass
+    return sl
+
+
+def check_live(url: str, cfg: Config) -> bool:
+    """True if the room/channel is broadcasting publicly right now (used by the watchlist)."""
+    try:
+        import yt_dlp.networking._requests  # noqa: F401
+    except Exception:
+        pass
+    fix_urllib3()
+    import camsites
+    try:
+        sl = _new_session(cfg)
+        if camsites.detect(url):
+            try:
+                camsites.open_stream(sl, url, "best", cfg.cookies_browser, effective_cookie_file(cfg))
+                return True
+            except Exception:
+                return False
+        return bool(sl.streams(url))
+    except Exception:
+        return False
+
+
+def run_live_streamlink(item: Item, cfg: Config) -> None:
+    from streamlink import Streamlink
+    from streamlink.exceptions import NoPluginError, PluginError
+
+    sl = _new_session(cfg)
+    cookie_file = effective_cookie_file(cfg)
 
     stream = None
     while stream is None:
@@ -585,6 +686,10 @@ def run_live_streamlink(item: Item, cfg: Config) -> None:
                 if now - last_t >= 1.0:
                     item.speed = (item.done - last_b) / (now - last_t)
                     last_t, last_b = now, item.done
+                if item.limit_min and now - item.started >= item.limit_min * 60:
+                    break
+                if item.limit_mb and item.done >= item.limit_mb * 1048576:
+                    break
     finally:
         try:
             fd.close()
@@ -722,7 +827,7 @@ class Manager:
         return sum(1 for i in self.items if i.running)
 
     def tick(self) -> None:
-        slots = self.cfg.max_concurrent - self.active_count()
+        slots = effective_slots(self.cfg) - self.active_count()
         for it in self.items:
             if slots <= 0:
                 break
@@ -799,6 +904,111 @@ class Manager:
             self.items = [Item.from_json(d) for d in data]
         except Exception:
             self.items = []
+
+
+# ----------------------------------------------------------------------------
+# Thumbnails, link preview, convert / trim
+# ----------------------------------------------------------------------------
+
+def thumb_dir() -> Path:
+    d = config_dir() / "thumbs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def thumb_path(item: Item) -> Path:
+    return thumb_dir() / f"{item.id}.jpg"
+
+
+def fetch_thumb(item: Item) -> str:
+    """Make sure a small preview picture exists for the item; returns its path or ''."""
+    out = thumb_path(item)
+    if out.exists() and out.stat().st_size > 0:
+        return str(out)
+    try:
+        if item.path and os.path.isfile(item.path):
+            ff = find_ffmpeg()
+            if ff and Path(item.path).suffix.lower() not in (".mp3", ".m4a", ".opus", ".ogg", ".wav", ".flac"):
+                for ss in ("3", "0"):
+                    r = subprocess.run([ff, "-y", "-loglevel", "error", "-ss", ss, "-i", item.path,
+                                        "-frames:v", "1", "-vf", "scale=360:-2", str(out)],
+                                       capture_output=True, timeout=40)
+                    if r.returncode == 0 and out.exists() and out.stat().st_size > 0:
+                        return str(out)
+        if item.thumb.lower().startswith(("http://", "https://")):
+            import urllib.request
+            req = urllib.request.Request(item.thumb, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = r.read(4_000_000)
+            if data:
+                out.write_bytes(data)
+                return str(out)
+    except Exception:
+        pass
+    return ""
+
+
+def probe(url: str, cfg: Config) -> dict:
+    """Quick look at a link (title, length, picture, size) without downloading it."""
+    import camsites
+    if camsites.detect(url):
+        return {"live": True, "title": camsites.username(url) or url}
+    try:
+        import yt_dlp.networking._requests  # noqa: F401
+    except Exception:
+        pass
+    fix_urllib3()
+    import yt_dlp
+    opts = _common_ydl_opts(cfg)
+    opts.update({"skip_download": True, "socket_timeout": 15, "retries": 1, "extractor_retries": 1})
+    for k in ("postprocessors", "writesubtitles", "subtitleslangs", "merge_output_format", "postprocessor_args"):
+        opts.pop(k, None)
+    opts["format"] = "best"
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info:
+        return {}
+    if info.get("_type") == "playlist" and info.get("entries"):
+        info = next((x for x in info["entries"] if x), info)
+    heights = sorted({f.get("height") for f in (info.get("formats") or []) if f.get("height")}, reverse=True)
+    size = info.get("filesize") or info.get("filesize_approx") or 0
+    return {"title": info.get("title") or url, "duration": int(info.get("duration") or 0),
+            "thumbnail": info.get("thumbnail") or "", "size": int(size), "heights": heights}
+
+
+def _ffmpeg_run(args: list[str]) -> None:
+    ff = find_ffmpeg()
+    if not ff:
+        raise RuntimeError("ffmpeg was not found (reinstall Grabwave)")
+    r = subprocess.run([ff, "-y", "-loglevel", "error"] + args, capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode("utf-8", "replace")[-600:] or "ffmpeg failed")
+
+
+def convert_file(path: str, kind: str, cfg: Config) -> str:
+    """Convert a finished file to 'mp3' or 'mp4' next to the original. Returns the new path."""
+    src = Path(path)
+    out = src.with_name(src.stem + f" (converted).{kind}")
+    th = ["-threads", str(perf(cfg)["threads"])] if perf(cfg)["threads"] else []
+    if kind == "mp3":
+        _ffmpeg_run(["-i", str(src), "-vn", "-codec:a", "libmp3lame", "-q:a", "2"] + th + [str(out)])
+    else:
+        _ffmpeg_run(["-i", str(src), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                     "-c:a", "aac", "-movflags", "+faststart"] + th + [str(out)])
+    return str(out)
+
+
+def trim_file(path: str, start: str, end: str) -> str:
+    """Cut a piece out of a file (times like 90, 1:30 or 0:01:30) without re-encoding."""
+    src = Path(path)
+    out = src.with_name(src.stem + f" (trimmed){src.suffix}")
+    args = []
+    if start:
+        args += ["-ss", start]
+    if end:
+        args += ["-to", end]
+    _ffmpeg_run(args + ["-i", str(src), "-c", "copy", str(out)])
+    return str(out)
 
 
 # ----------------------------------------------------------------------------
