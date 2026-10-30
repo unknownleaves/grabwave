@@ -175,6 +175,15 @@ def icon_pixmap(name: str, color: str = MUTED, size: int = 20) -> QtGui.QPixmap:
         p.setBrush(col)
         p.drawRoundedRect(QtCore.QRectF(7, 5, 3.6, 14), 1.2, 1.2)
         p.drawRoundedRect(QtCore.QRectF(13.4, 5, 3.6, 14), 1.2, 1.2)
+    elif name == "help":
+        p.drawEllipse(P(12, 12), 8.5, 8.5)
+        q = QtGui.QPainterPath(P(9.3, 9.6))
+        q.cubicTo(9.5, 6.4, 14.8, 6.4, 14.8, 9.6)
+        q.cubicTo(14.8, 11.6, 12, 11.6, 12, 14)
+        p.drawPath(q)
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawEllipse(P(12, 17), 1.1, 1.1)
     elif name == "stop":
         p.setPen(Qt.NoPen)
         p.setBrush(col)
@@ -210,6 +219,8 @@ QToolButton#grab {{ background: {ACCENT}; border-radius: 18px; padding: 0; }}
 QToolButton#grab:hover {{ background: #9a3a22; }}
 QToolButton#grab:disabled {{ background: #d9b8ad; }}
 QLineEdit#urlbar {{ border-radius: 18px; padding: 0 16px; min-height: 34px; background: {CARD}; }}
+QProgressBar {{ border: none; background: #ece5d6; border-radius: 5px; min-height: 10px; max-height: 10px; text-align: center; color: transparent; }}
+QProgressBar::chunk {{ background: {ACCENT}; border-radius: 5px; }}
 QLineEdit#path {{ border-radius: 10px; padding: 5px 12px; background: #efe9dc; color: {MUTED}; }}
 """
 
@@ -1497,3 +1508,144 @@ class Splash(QtWidgets.QWidget):
             f.setPointSize(9)
             p.setFont(f)
             p.drawText(QtCore.QRectF(r.left() + 12, r.bottom() - 28, r.width() - 24, 20), Qt.AlignCenter, self.sub)
+
+
+# ---- update dialog -----------------------------------------------------------------------------
+class UpdateDialog(QtWidgets.QDialog):
+    """'Grabwave X is ready': Update now / Remind me later. Downloads and installs in the background."""
+    quitRequested = QtCore.Signal()
+    _progress = QtCore.Signal(int, int)
+    _result = QtCore.Signal(str)
+
+    def __init__(self, parent, entry: dict, current: str, proxy: str = "", busy: int = 0):
+        super().__init__(parent)
+        import updater as U
+        self._U = U
+        self.entry, self.proxy = entry, proxy
+        self._cancel = threading.Event()
+        self._path = None
+        self._working = False
+        self.setWindowTitle("Update available")
+        self.setMinimumWidth(460)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(24, 22, 24, 18)
+        lay.setSpacing(10)
+        top = QtWidgets.QHBoxLayout()
+        top.addWidget(Wavy("happy", 56))
+        col = QtWidgets.QVBoxLayout()
+        col.setSpacing(2)
+        t = QtWidgets.QLabel(f"Grabwave {entry['version']} is ready")
+        t.setFont(serif(15))
+        col.addWidget(t)
+        s = QtWidgets.QLabel(f"You are using version {current}.")
+        s.setStyleSheet(f"color: {MUTED};")
+        col.addWidget(s)
+        top.addLayout(col, 1)
+        lay.addLayout(top)
+        if entry.get("notes"):
+            lab = QtWidgets.QLabel("What's new")
+            lab.setStyleSheet("font-weight: 600;")
+            lay.addWidget(lab)
+            notes = QtWidgets.QPlainTextEdit(entry["notes"])
+            notes.setReadOnly(True)
+            notes.setMaximumHeight(130)
+            lay.addWidget(notes)
+        if busy:
+            w = QtWidgets.QLabel(f"{busy} download(s) are running. They will be paused during the update.")
+            w.setWordWrap(True)
+            w.setStyleSheet(f"color: {MUTED};")
+            lay.addWidget(w)
+        self.bar = QtWidgets.QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.hide()
+        lay.addWidget(self.bar)
+        self.status = QtWidgets.QLabel("")
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet(f"color: {MUTED};")
+        lay.addWidget(self.status)
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        self.later = QtWidgets.QPushButton("Remind me later")
+        self.later.clicked.connect(self._later)
+        self.now = QtWidgets.QPushButton("Update now")
+        self.now.setObjectName("primary")
+        self.now.setDefault(True)
+        self.now.clicked.connect(self._start)
+        row.addWidget(self.later)
+        row.addWidget(self.now)
+        lay.addLayout(row)
+        self._progress.connect(self._on_progress)
+        self._result.connect(self._on_result)
+
+    def _later(self):
+        if self._working:
+            self._cancel.set()
+        self.reject()
+
+    def reject(self):
+        if self._working:
+            self._cancel.set()
+        super().reject()
+
+    def _start(self):
+        if not self._U.can_self_install():
+            self.status.setText("This copy runs from source code, so it can't update itself. "
+                                "Download the new installer instead.")
+            return
+        self._working = True
+        self.now.setEnabled(False)
+        self.later.setText("Cancel")
+        self.bar.show()
+        self.status.setText("Downloading the update…")
+
+        def work():
+            try:
+                self._path = self._U.download(self.entry, lambda d, t: self._progress.emit(d, t),
+                                              self._cancel, self.proxy)
+                self._result.emit("")
+            except self._U.Cancelled:
+                self._result.emit("cancelled")
+            except Exception as e:  # noqa: BLE001
+                self._result.emit(str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_progress(self, done: int, total: int):
+        if total:
+            self.bar.setValue(int(done * 100 / total))
+            self.status.setText(f"Downloading the update… {E.fmt_size(done)} of {E.fmt_size(total)}")
+        else:
+            self.bar.setRange(0, 0)
+
+    def _on_result(self, msg: str):
+        if msg == "cancelled":
+            return
+        if msg:
+            self._working = False
+            self.bar.hide()
+            self.now.setEnabled(True)
+            self.later.setText("Remind me later")
+            self.status.setText(msg)
+            self.status.setStyleSheet(f"color: {RED};")
+            return
+        self.bar.setRange(0, 0)
+        self.status.setText("Installing. Grabwave will close and open again in a moment…")
+        self.later.setEnabled(False)
+        try:
+            must_quit = self._U.install(self._path)
+        except Exception as e:  # noqa: BLE001
+            self._working = False
+            self.bar.hide()
+            self.later.setEnabled(True)
+            self.later.setText("Close")
+            self.status.setText(f"Couldn't start the installer: {e}")
+            self.status.setStyleSheet(f"color: {RED};")
+            return
+        if must_quit:
+            self.quitRequested.emit()
+            self.accept()
+        else:
+            self.bar.hide()
+            self.later.setEnabled(True)
+            self.later.setText("Close")
+            self.status.setText("The new version was opened for you. Finish the installation there.")
