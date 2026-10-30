@@ -102,6 +102,118 @@ QStatusBar::item {{ border: none; }}
 """
 
 
+
+# ---- painted icons (same look on every computer; no emoji) ---------------------------------------
+def icon_pixmap(name: str, color: str = MUTED, size: int = 20) -> QtGui.QPixmap:
+    pm = QtGui.QPixmap(size * 2, size * 2)
+    pm.setDevicePixelRatio(2)
+    pm.fill(Qt.transparent)
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.Antialiasing)
+    p.scale(size / 24.0, size / 24.0)
+    col = QtGui.QColor(color)
+    pen = QtGui.QPen(col, 1.9, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    P = QtCore.QPointF
+
+    def poly(*pts):
+        p.drawPolyline([P(x, y) for x, y in pts])
+
+    def line(x1, y1, x2, y2):
+        p.drawLine(P(x1, y1), P(x2, y2))
+
+    if name == "home":
+        poly((4, 11), (12, 4), (20, 11))
+        poly((6, 10), (6, 20), (18, 20), (18, 10))
+        poly((10, 20), (10, 14), (14, 14), (14, 20))
+    elif name == "back":
+        line(19, 12, 5, 12)
+        poly((11, 6), (5, 12), (11, 18))
+    elif name == "forward":
+        line(5, 12, 19, 12)
+        poly((13, 6), (19, 12), (13, 18))
+    elif name in ("reload", "retry"):
+        p.drawArc(QtCore.QRectF(5, 5, 14, 14), 60 * 16, 280 * 16)
+        poly((14.5, 1.8), (14.5, 6.2), (19, 5.4))
+    elif name == "download":
+        line(12, 4, 12, 15)
+        poly((7, 10), (12, 15), (17, 10))
+        poly((5, 16), (5, 20), (19, 20), (19, 16))
+    elif name == "external":
+        line(11, 13, 19, 5)
+        poly((13, 5), (19, 5), (19, 11))
+        poly((17, 14), (17, 19), (5, 19), (5, 7), (10, 7))
+    elif name == "folder":
+        poly((3, 7), (9, 7), (11, 9), (21, 9), (21, 19), (3, 19), (3, 7))
+    elif name == "trash":
+        line(4, 7, 20, 7)
+        poly((9, 7), (9, 4), (15, 4), (15, 7))
+        poly((6, 7), (7, 20), (17, 20), (18, 7))
+        line(10, 11, 10, 16)
+        line(14, 11, 14, 16)
+    elif name == "sliders":
+        for y, x in ((7, 9), (12, 15), (17, 8)):
+            line(4, y, 20, y)
+            p.setBrush(QtGui.QColor(PAPER))
+            p.drawEllipse(P(x, y), 2.3, 2.3)
+            p.setBrush(Qt.NoBrush)
+    elif name == "plus":
+        line(12, 5, 12, 19)
+        line(5, 12, 19, 12)
+    elif name == "chevron":
+        poly((6, 9), (12, 15), (18, 9))
+    elif name == "x":
+        line(6, 6, 18, 18)
+        line(18, 6, 6, 18)
+    elif name == "play":
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawPolygon([P(8, 5), P(19, 12), P(8, 19)])
+    elif name == "pause":
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawRoundedRect(QtCore.QRectF(7, 5, 3.6, 14), 1.2, 1.2)
+        p.drawRoundedRect(QtCore.QRectF(13.4, 5, 3.6, 14), 1.2, 1.2)
+    elif name == "stop":
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawRoundedRect(QtCore.QRectF(6.5, 6.5, 11, 11), 2, 2)
+    p.end()
+    return pm
+
+
+def icon(name: str, color: str = MUTED, size: int = 20) -> QtGui.QIcon:
+    return QtGui.QIcon(icon_pixmap(name, color, size))
+
+
+def build_style() -> str:
+    """STYLE plus the pieces that need a picture file (the drop-down chevron). Call after QApplication exists."""
+    extra = ""
+    try:
+        d = E.config_dir() / "ui"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / "chevron.png"
+        icon_pixmap("chevron", MUTED, 12).save(str(f), "PNG")
+        url = str(f).replace("\\", "/")
+        extra = f"""
+QComboBox {{ padding: 5px 30px 5px 12px; border-radius: 10px; }}
+QComboBox::drop-down {{ border: none; width: 26px; subcontrol-origin: padding; subcontrol-position: center right; }}
+QComboBox::down-arrow {{ image: url("{url}"); width: 12px; height: 12px; }}
+"""
+    except Exception:
+        pass
+    return STYLE + extra + f"""
+QToolButton#nav {{ border-radius: 18px; padding: 0; }}
+QToolButton#nav:hover {{ background: #e9e1d2; }}
+QToolButton#grab {{ background: {ACCENT}; border-radius: 18px; padding: 0; }}
+QToolButton#grab:hover {{ background: #9a3a22; }}
+QToolButton#grab:disabled {{ background: #d9b8ad; }}
+QLineEdit#urlbar {{ border-radius: 18px; padding: 0 16px; min-height: 34px; background: {CARD}; }}
+QLineEdit#path {{ border-radius: 10px; padding: 5px 12px; background: #efe9dc; color: {MUTED}; }}
+"""
+
+
 # ---- mascot ------------------------------------------------------------------------------------
 def paint_wavy(p: QtGui.QPainter, rect: QtCore.QRectF, mood: str = "working", color: str = ACCENT) -> None:
     """Draw 'Wavy' (a friendly wave blob) in rect. mood: sleepy | working | happy | oops."""
@@ -213,7 +325,7 @@ class WaveLine(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(14)
+        self.setFixedHeight(10)
 
     def paintEvent(self, e):
         p = QtGui.QPainter(self)
@@ -221,9 +333,11 @@ class WaveLine(QtWidgets.QWidget):
         path = QtGui.QPainterPath()
         mid = self.height() / 2
         path.moveTo(0, mid)
-        for x in range(0, self.width() + 4, 3):
-            path.lineTo(x, mid + math.sin(x / 11.8) * 3.2)
-        p.setPen(QtGui.QPen(QtGui.QColor(ACCENT), 2, Qt.SolidLine, Qt.RoundCap))
+        for x in range(0, self.width() + 2, 2):
+            path.lineTo(x, mid + math.sin(x / 7.0) * 2.0)
+        col = QtGui.QColor(ACCENT)
+        col.setAlpha(150)
+        p.setPen(QtGui.QPen(col, 1.4, Qt.SolidLine, Qt.RoundCap))
         p.drawPath(path)
 
 
@@ -344,6 +458,8 @@ def status_line(it: E.Item) -> tuple[str, str]:
             parts.append(E.fmt_dur(time.time() - it.started))
         parts.append(E.fmt_size(it.done))
         return "  ·  ".join(parts), RED
+    if s == "Retrying":
+        return "Trying another way…", MUTED
     if s == "Waiting":
         return "Waiting for the stream to start…", MUTED
     if s == "Processing":
@@ -387,12 +503,12 @@ class CardDelegate(QtWidgets.QStyledItemDelegate):
     @staticmethod
     def main_glyph(it: E.Item) -> str:
         if it.status in ("Failed", "Paused", "Stopped"):
-            return "⟳"
+            return "retry"
         if it.status == "Completed":
-            return "▶"
+            return "play"
         if it.kind == "live" and it.running:
-            return "■"
-        return "❚❚"
+            return "stop"
+        return "pause"
 
     def paint(self, p, opt, idx):
         it = idx.data(Qt.UserRole)
@@ -482,17 +598,13 @@ class CardDelegate(QtWidgets.QStyledItemDelegate):
 
         # hover buttons
         if hover:
-            glyphs = {"main": self.main_glyph(it), "folder": "⌂", "remove": "✕"}
+            glyphs = {"main": self.main_glyph(it), "folder": "folder", "remove": "x"}
             for key, r in btns.items():
                 p.setPen(QtGui.QPen(QtGui.QColor(LINE), 1))
                 p.setBrush(QtGui.QColor(CARD))
                 p.drawEllipse(r)
-                f3 = QtGui.QFont(p.font())
-                f3.setPointSize(9)
-                f3.setBold(False)
-                p.setFont(f3)
-                p.setPen(QtGui.QColor(ACCENT if key == "main" else MUTED))
-                p.drawText(r, Qt.AlignCenter, glyphs[key])
+                pm = icon_pixmap(glyphs[key], ACCENT if key == "main" else MUTED, 14)
+                p.drawPixmap(r.center().x() - 7, r.center().y() - 7, pm)
         p.restore()
 
     def editorEvent(self, event, model, option, index):
@@ -1139,7 +1251,7 @@ class WatchPage(QtWidgets.QWidget):
             on.toggled.connect(lambda v, ent=e: self._toggle(ent, v))
             h.addWidget(on)
             rm = QtWidgets.QToolButton()
-            rm.setText("✕")
+            rm.setIcon(icon("x", MUTED, 14))
             rm.setToolTip("Stop watching")
             rm.clicked.connect(lambda _=False, i=idx: self._remove(i))
             h.addWidget(rm)
