@@ -1,0 +1,24 @@
+Grabwave - Proprietary Software License
+
+Copyright (c) 2026 Grabwave. All rights reserved.
+
+This repository is made visible for transparency and to distribute official
+releases only. No license or right is granted to you except as stated below.
+
+You MAY:
+  - Download and install official releases of Grabwave for your own use,
+    subject to any purchase, trial or license terms shown with the release.
+
+You MAY NOT, without prior written permission from the copyright holder:
+  - Copy, modify, merge, publish, distribute, sublicense or sell the source
+    code or any part of it;
+  - Create derivative works or competing products from the source code;
+  - Remove or bypass any trial, licensing or update mechanism;
+  - Redistribute official or modified builds.
+
+Third-party components (for example Qt/PySide6, yt-dlp, streamlink and ffmpeg)
+remain under their own licenses. See THIRD_PARTY.md.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. TO THE MAXIMUM
+EXTENT PERMITTED BY LAW, THE AUTHOR IS NOT LIABLE FOR ANY CLAIM OR DAMAGES
+ARISING FROM ITS USE.
