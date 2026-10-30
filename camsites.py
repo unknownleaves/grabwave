@@ -21,12 +21,26 @@ class CamOffline(Exception):
     """Room exists but is offline / private / not public right now."""
 
 
+# ---------------------------------------------------------------------------------------------
+# HOW TO ADD ANOTHER LIVE-CAM SITE
+#   1. Write a resolver below, e.g.  def _mysite(http, url) -> list[str]
+#        - ask the site's own API for the room (use http.get / http.post and _get_json)
+#        - raise CamOffline("reason") if the room is offline/private
+#        - return a list of candidate HLS playlist addresses (.m3u8), best first
+#   2. Add ONE line to SITES at the bottom of this section:  "mysite": ("mysite.com", _mysite),
+#      (the first item is the text that must appear in the web address's host name)
+# That's all: detect(), recording and the settings pick it up automatically. A site that is not
+# listed here still works if streamlink or yt-dlp already know it.
+# ---------------------------------------------------------------------------------------------
+def _site_table():
+    return SITES
+
+
 def detect(url: str) -> str | None:
     host = urlparse(url).netloc.lower()
-    if "chaturbate." in host:
-        return "chaturbate"
-    if "stripchat." in host:
-        return "stripchat"
+    for key, (needle, _resolver) in _site_table().items():
+        if needle in host:
+            return key
     return None
 
 
@@ -148,6 +162,12 @@ def _stripchat(http, url: str) -> list[str]:
     return cands
 
 
+SITES = {
+    "chaturbate": ("chaturbate.", _chaturbate),
+    "stripchat": ("stripchat.", _stripchat),
+}
+
+
 def _pick(streams: dict, quality: str):
     import re
     if quality in streams:
@@ -167,7 +187,7 @@ def open_stream(sl, url: str, quality: str = "best", browser: str = "", cookie_f
 
     site = detect(url)
     http = Http(sl, browser, site or "", cookie_file)
-    cands = _chaturbate(http, url) if site == "chaturbate" else _stripchat(http, url)
+    cands = SITES[site][1](http, url)
     headers = {"Referer": url, "User-Agent": UA}
     sl.set_option("http-headers", headers)
     last = None
