@@ -21,7 +21,6 @@ import ui_extra as UI
 import updater as U
 
 VERSION = "2.7"
-import camsites
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -636,6 +635,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.tray_cb = QtWidgets.QCheckBox("Keep running in the system tray when I close the window (needed for the watchlist)")
         self.tray_cb.setChecked(cfg.close_to_tray)
         form.addRow("", self.tray_cb)
+        self.auto_eng = QtWidgets.QCheckBox("Keep the video engine up to date automatically")
+        self.auto_eng.setChecked(cfg.auto_engine)
+        form.addRow("", self.auto_eng)
         self.upd = QtWidgets.QCheckBox("Check for updates when Grabwave opens")
         self.upd.setChecked(cfg.check_updates)
         form.addRow("", self.upd)
@@ -725,6 +727,7 @@ class SettingsDialog(QtWidgets.QDialog):
         c.performance = next((n for n, rb in self.perf_radios.items() if rb.isChecked()), "Balanced")
         c.smart_paste, c.close_to_tray, c.sounds = self.smart.isChecked(), self.tray_cb.isChecked(), self.sounds.isChecked()
         c.check_updates = self.upd.isChecked()
+        c.auto_engine = self.auto_eng.isChecked()
         c.live_quality = self.quality.text().strip() or "best"
         c.live_poll_seconds = self.poll.value()
         c.remux_mp4 = self.remux.isChecked()
@@ -836,6 +839,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tick()
         urls = self._clipboard_urls()  # a link already on the clipboard: show it in the paste bar
         self.browser.home.set_clipboard_url(urls[0] if urls else "")
+        if self.cfg.auto_engine:
+            QtCore.QTimer.singleShot(9000, self._auto_engine)
         if self.cfg.check_updates:  # a few seconds after opening, quietly look for a newer version
             QtCore.QTimer.singleShot(4000, lambda: self._check_updates(False))
 
@@ -867,15 +872,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mascot = UI.Wavy("sleepy", 34)
         h.addWidget(self.mascot)
         helpb = QtWidgets.QToolButton()
+        helpb.setText("Help")
         helpb.setIcon(UI.icon("help", UI.MUTED, 20))
         helpb.setIconSize(QtCore.QSize(20, 20))
-        helpb.setToolTip("Help")
+        helpb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        helpb.setStyleSheet("QToolButton { font-size: 13px; font-weight: 600; padding: 5px 10px; }")
+        helpb.setCursor(Qt.PointingHandCursor)
+        helpb.setToolTip("Help and updates")
         helpb.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         hm = QtWidgets.QMenu(helpb)
         hm.addAction("Check for updates…", lambda: self._check_updates(True))
         hm.addSeparator()
+        hm.addAction("Quick guide", self._guide)
+        hm.addAction("Open log / settings folder", lambda: open_path(str(E.config_dir())))
+        hm.addSeparator()
         hm.addAction("About Grabwave", self._about)
-        hm.addAction("Open the settings folder", lambda: open_path(str(E.config_dir())))
         helpb.setMenu(hm)
         h.addWidget(helpb)
         gear = QtWidgets.QToolButton()
@@ -989,16 +1000,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
         opts = QtWidgets.QHBoxLayout()
         opts.setSpacing(8)
+        self.opt_btn = QtWidgets.QPushButton()
+        self.opt_btn.setObjectName("small")
+        self.opt_btn.setCursor(Qt.PointingHandCursor)
+        self.opt_btn.setToolTip("Format, quality and subtitles")
+        opts.addWidget(self.opt_btn)
+        self.opt_more = QtWidgets.QWidget()
+        mh = QtWidgets.QHBoxLayout(self.opt_more)
+        mh.setContentsMargins(0, 0, 0, 0)
+        mh.setSpacing(8)
 
         def combo(label, items, current, setter):
             lb = QtWidgets.QLabel(label)
             lb.setStyleSheet(f"color: {UI.MUTED};")
-            opts.addWidget(lb)
+            mh.addWidget(lb)
             c = QtWidgets.QComboBox()
             c.addItems(items)
             c.setCurrentText(current)
             c.currentTextChanged.connect(setter)
-            opts.addWidget(c)
+            c.currentTextChanged.connect(lambda _t: self._opt_summary())
+            mh.addWidget(c)
             return c
 
         combo("Format", ["MP4", "MKV", "WEBM", "MP3 (audio)"], self.cfg.fmt, lambda t: self._pref("fmt", t))
@@ -1006,6 +1027,11 @@ class MainWindow(QtWidgets.QMainWindow):
               self.cfg.quality, lambda t: self._pref("quality", t))
         combo("Subtitle", ["None"] + list(E.SUBTITLE_CODES), self.cfg.subtitle,
               lambda t: self._pref("subtitle", t))
+        self.opt_more.hide()
+        opts.addWidget(self.opt_more)
+        self.opt_btn.clicked.connect(lambda: [self.opt_more.setVisible(not self.opt_more.isVisible()),
+                                              self._opt_summary()])
+        self._opt_summary()
         opts.addSpacing(10)
         lb = QtWidgets.QLabel("Save to")
         lb.setStyleSheet(f"color: {UI.MUTED};")
@@ -1026,6 +1052,12 @@ class MainWindow(QtWidgets.QMainWindow):
         bl.addLayout(opts)
         lay.addWidget(self.tray_body)
         return self.tray
+
+    def _opt_summary(self):
+        c = self.cfg
+        sub = "" if c.subtitle in ("", "None") else " · " + c.subtitle
+        arrow = "◂" if self.opt_more.isVisible() else "▾"
+        self.opt_btn.setText(f"{c.fmt.split()[0]} · {c.quality}{sub}  {arrow}")
 
     def _toggle_tray(self):
         self.cfg.tray_collapsed = not self.cfg.tray_collapsed
@@ -1199,7 +1231,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _add_url(self, u: str, quality: str = "", announce: bool = True) -> E.Item:
         here = self.browser.current_url().rstrip("/")
-        kind = "live" if camsites.detect(u) else "download"
+        kind = "live" if E.cam_detect(u) else "download"
         it = self.mgr.add(u, kind, "")
         if quality:
             it.quality = quality
@@ -1230,7 +1262,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._add_urls(d.urls(), d.kind())
 
     def _add_from_browser(self, url: str):
-        kind = "live" if camsites.detect(url) else "download"
+        kind = "live" if E.cam_detect(url) else "download"
         self._add_urls([url], kind)
         self.statusBar().showMessage("Added to downloads", 2500)
 
@@ -1242,7 +1274,7 @@ class MainWindow(QtWidgets.QMainWindow):
         url = media if media.lower().startswith(("http://", "https://")) else page
         if not url:
             return
-        it = self.mgr.add(url, "live" if camsites.detect(url) else "download", "")
+        it = self.mgr.add(url, "live" if E.cam_detect(url) else "download", "")
         referer = (info.get("referer") or "").strip()
         if referer and referer != url and media:  # direct media address: send the page that played it as Referer
             it.referer = referer
@@ -1283,7 +1315,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 open_path(str(Path(it.path).parent))
             else:
                 self._open_dir()
-        elif it.status in ("Failed", "Paused", "Stopped"):
+        elif it.status == "Failed":
+            # "Fix it": go through every route again, including the automatic page capture
+            self._announced.discard(it.id)
+            self._auto_tried.discard(it.id)
+            it.alt_url = ""
+            self.mgr.resume(it)
+            self.statusBar().showMessage("Trying every way we know…", 5000)
+        elif it.status in ("Paused", "Stopped"):
             self.mgr.resume(it)
         elif it.status == "Completed":
             if it.path and os.path.exists(it.path):
@@ -1411,6 +1450,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.shelf.refresh(force=True)
         self.splash.play(new.title, "is on your shelf.", self.tray.y())
 
+    # --- video engine (yt-dlp) kept fresh quietly; used the next time Grabwave starts -------
+    def _auto_engine(self):
+        import threading
+        import time as _t
+        if _t.time() - self.cfg.engine_checked < 20 * 3600:
+            return
+        self.cfg.engine_checked = _t.time()
+        self.cfg.save()
+
+        def work():
+            try:
+                E.update_ytdlp("nightly", self.cfg.proxy)
+            except Exception:  # noqa: BLE001 - offline or blocked: just try again tomorrow
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
     # --- updates ---------------------------------------------------------------
     def _check_updates(self, manual: bool):
         import threading
@@ -1443,6 +1499,17 @@ class MainWindow(QtWidgets.QMainWindow):
         dlg.quitRequested.connect(self._quit_app)
         dlg.exec()
         self._update_open = False
+
+    def _guide(self):
+        QtWidgets.QMessageBox.information(
+            self, "Quick guide",
+            "<b>Download a video</b><br>Paste a link in the box on the Browse page and press Enter, "
+            "or open a site in the built-in browser and press the red download button.<br><br>"
+            "<b>Record a live stream</b><br>Paste the room or stream link. Recording starts and keeps "
+            "going until the stream ends or you stop it.<br><br>"
+            "<b>Shelf</b> shows everything you've saved. Right-click a video to convert or trim it.<br><br>"
+            "<b>Live</b> is your Watchlist. Grabwave starts recording when a room goes live.<br><br>"
+            "<b>Updates</b>: Help, then Check for updates. Grabwave also checks when it opens.")
 
     def _about(self):
         try:

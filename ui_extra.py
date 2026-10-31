@@ -1211,8 +1211,7 @@ class WatchPage(QtWidgets.QWidget):
             return
         if "://" not in u:
             u = "https://" + u
-        import camsites
-        nm = self.name.text().strip() or camsites.username(u) or urlparse(u).netloc
+        nm = self.name.text().strip() or E.cam_username(u) or urlparse(u).netloc
         self.cfg.watchlist.append({"url": u, "name": nm, "enabled": True, "limit_min": 0, "limit_mb": 0})
         self.cfg.save()
         self.url.clear()
