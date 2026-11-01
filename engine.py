@@ -317,7 +317,7 @@ PERFORMANCE = {
     # slots: most simultaneous jobs; frags: parallel pieces per download; tick: window refresh (ms);
     # threads: ffmpeg threads (0 = all); thumbs: background picture loaders; prio: process priority;
     # chromium: extra flags for the built-in browser (take effect after a restart)
-    "Maximum": dict(slots=MAX_CONCURRENT, frags=8, tick=250, threads=0, thumbs=4, prio="high", chromium=""),
+    "Maximum": dict(slots=MAX_CONCURRENT, frags=16, tick=250, threads=0, thumbs=4, prio="high", chromium=""),
     "Balanced": dict(slots=10, frags=4, tick=500, threads=2, thumbs=2, prio="normal",
                      chromium="--renderer-process-limit=4"),
     "Light": dict(slots=3, frags=1, tick=1000, threads=1, thumbs=1, prio="low",
