@@ -1,4 +1,4 @@
-Grabwave 2.10
+Grabwave 2.11
 - Built-in video player: double-click a video on the Shelf to watch it inside Grabwave, including formats the browser tab can't play.
 - More ways to save a video: if one method fails, Grabwave now tries the next (page video list, captured stream, ffmpeg copy, gallery-dl).
 - Fixes pages that only gave a short preview clip instead of the full video.

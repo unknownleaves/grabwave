@@ -1,0 +1,122 @@
+name: build installers
+# Builds Grabwave-Setup.exe (Windows), Grabwave.dmg (macOS) and Grabwave-x86_64.AppImage (Linux),
+# then publishes them on the repository's Releases page as plain downloads (no zip).
+# Run it from the Actions tab: "Run workflow".
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt imageio-ffmpeg
+      - name: Get ffmpeg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ffmpeg | Out-Null
+          python -c "import shutil,imageio_ffmpeg;shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(),'ffmpeg/ffmpeg.exe')"
+      - name: Check that every source file is present and valid
+        shell: python
+        run: |
+          import py_compile, sys
+          from pathlib import Path
+          need = ["app.py", "engine.py", "ui_extra.py", "updater.py", "rollback.py", "Grabwave.spec", "VERSION_PLACEHOLDER"]
+          need.remove("VERSION_PLACEHOLDER")
+          bad = [f for f in need if not Path(f).is_file()]
+          for f in need:
+              if f.endswith(".py") and Path(f).is_file():
+                  try:
+                      py_compile.compile(f, doraise=True)
+                  except Exception as e:
+                      bad.append(f"{f}: {e}")
+          if bad:
+              print("PROBLEM WITH THESE FILES:", *bad, sep="\n  ")
+              sys.exit(1)
+          print("all source files present and valid")
+      - run: pyinstaller --noconfirm --clean Grabwave.spec
+      - name: Build installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $v = [regex]::Match((Get-Content app.py -Raw), 'VERSION = .([0-9.]+)').Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" installer\Grabwave.iss
+      - uses: actions/upload-artifact@v4
+        with: { name: Grabwave-Windows-exe, path: dist/Grabwave-Setup.exe }
+  macos:
+    runs-on: macos-latest   # Apple Silicon
+    continue-on-error: true   # GitHub's Macs are sometimes unavailable; that must not block the other downloads
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt imageio-ffmpeg
+      - name: Get ffmpeg
+        run: |
+          mkdir -p ffmpeg
+          python -c "import shutil,imageio_ffmpeg;shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(),'ffmpeg/ffmpeg')"
+      - run: pyinstaller --noconfirm --clean Grabwave.spec
+      - run: bash packaging/mac/make_dmg.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: Grabwave-macOS-dmg, path: dist/Grabwave.dmg }
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: System libraries for Qt WebEngine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libnss3 \
+            libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 libfuse2
+      - run: bash build_linux.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: Grabwave-Linux-AppImage, path: dist/Grabwave-x86_64.AppImage }
+  release:
+    # Publishes a Release (a normal download page, no zip files) only when the Windows and Linux builds both worked.
+    # (The Mac build may fail without blocking.) A half-finished release can't be fixed later, so we don't create one.
+    needs: [windows, macos, linux]
+    if: ${{ !cancelled() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        run: echo "VER=$(grep -oP 'VERSION = "\K[0-9.]+' app.py)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          pattern: Grabwave-*
+          merge-multiple: true
+      - name: Write latest.json (read by the in-app updater)
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          ver, repo = os.environ["VER"], os.environ["REPO"]
+          folder = Path("out")
+          notes_file = Path("release_notes.txt")
+          notes = notes_file.read_text("utf-8").strip() if notes_file.is_file() else ""
+          manifest = {"version": ver, "notes": notes}
+          names = {"windows": "Grabwave-Setup.exe", "mac": "Grabwave.dmg", "linux": "Grabwave-x86_64.AppImage"}
+          for key, name in names.items():
+              p = folder / name
+              if p.is_file():
+                  manifest[key] = {"url": f"https://github.com/{repo}/releases/download/v{ver}/{name}",
+                                   "sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "size": p.stat().st_size}
+          (folder / "latest.json").write_text(json.dumps(manifest, indent=2), "utf-8")
+          print(json.dumps(manifest, indent=2))
+          PY
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VER }}
+          name: Grabwave ${{ env.VER }}
+          body_path: release_notes.txt
+          files: out/*
