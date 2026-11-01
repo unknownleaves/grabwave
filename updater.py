@@ -136,8 +136,13 @@ def install(path: Path) -> bool:
     key = platform_key()
     if key == "windows":
         # per-user installer: runs without a prompt, closes Grabwave if needed, and starts the new version
+        flags = 0
+        if os.name == "nt":  # keep the installer running after Grabwave closes, with no console window
+            flags = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | NEW_PROCESS_GROUP | NO_WINDOW
+        log = path.parent / "install.log"  # if an update ever fails, this file says why
         subprocess.Popen([str(path), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
-                          "/CLOSEAPPLICATIONS", "/relaunch=1"], close_fds=True)
+                          "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/relaunch=1", f"/LOG={log}"],
+                         close_fds=True, creationflags=flags)
         return True
     if key == "mac":
         exe = Path(sys.executable).resolve()
