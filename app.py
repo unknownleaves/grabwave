@@ -1514,6 +1514,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if self._update_open or not self.isVisible():
             return
+        if not manual and (QtWidgets.QApplication.activeModalWidget() is not None or not self.isActiveWindow()):
+            # another window is open (or Grabwave is in the background): ask again in a few seconds
+            QtCore.QTimer.singleShot(6000, lambda e=entry: self._on_update_checked(e, "", False))
+            return
         self._update_open = True
         dlg = UI.UpdateDialog(self, entry, VERSION, self.cfg.proxy, self.mgr.active_count())
         dlg.quitRequested.connect(self._quit_app)
