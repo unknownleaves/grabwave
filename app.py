@@ -6,6 +6,10 @@ Subtitle selectors and a file-location row at the bottom).
 """
 from __future__ import annotations
 
+import rollback  # standard library only: repairs a broken update before anything else loads
+
+rollback.guard()
+
 import os
 import subprocess
 import warnings
@@ -20,7 +24,7 @@ import engine as E
 import ui_extra as UI
 import updater as U
 
-VERSION = "2.9"
+VERSION = "2.10"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -147,18 +151,57 @@ SNIFF_SKIP = ("preview", "thumb", "trailer", "sprite", "teaser", "poster", "doub
 NO_AUTO_CAPTURE = ("youtube.com", "youtu.be", "youtube-nocookie.com", "google.com", "x.com", "twitter.com")
 
 
-def pick_best_media(urls: list) -> str:
-    """The stream address most likely to be the video: a master playlist, else the first playlist, else the
-    latest direct file."""
+PREVIEW_WORDS = ("preview", "trailer", "teaser", "thumb", "sample", "promo", "banner", "sprite", "poster",
+                 "storyboard", "/ads/", "_ad_", "intro", "short_", "_short", "clip_", "gif")
+
+
+def is_preview(u: str) -> bool:
+    """Short preview clips, trailers and ads that many pages load next to the real video."""
+    low = u.lower().split("?")[0]
+    return any(w in low for w in PREVIEW_WORDS)
+
+
+def direct_size(url: str, referer: str) -> int:
+    """File size of a direct video address (0 if unknown). Asks for one byte, so it is quick."""
+    import ssl
+    import urllib.request
+    try:
+        try:
+            import certifi
+            ctx = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            ctx = ssl.create_default_context()
+        req = urllib.request.Request(url, headers={
+            "Range": "bytes=0-0", "Referer": referer, "User-Agent": E.browser_ua() or "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
+            cr = r.headers.get("Content-Range", "")
+            if "/" in cr and cr.rsplit("/", 1)[1].isdigit():
+                return int(cr.rsplit("/", 1)[1])
+            return int(r.headers.get("Content-Length") or 0)
+    except Exception:
+        return 0
+
+
+def pick_best_media(urls: list, referer: str = "", probe: bool = False) -> str:
+    """The stream address most likely to be the full video: a master playlist, else the first playlist,
+    else the biggest direct file (previews and trailers are ignored when anything else was found)."""
     def ext(u): return u.lower().split("?")[0]
-    pls = [u for u in urls if ext(u).endswith(".m3u8")]
+    real = [u for u in urls if not is_preview(u)] or list(urls)
+    pls = [u for u in real if ext(u).endswith(".m3u8")]
     if pls:
         masters = [u for u in pls if "master" in u.lower()]
         return (masters or pls)[0]
-    mpd = [u for u in urls if ext(u).endswith(".mpd")]
+    mpd = [u for u in real if ext(u).endswith(".mpd")]
     if mpd:
         return mpd[0]
-    return urls[-1] if urls else ""
+    files = real[-6:]
+    if probe and len(files) > 1:  # several direct files: the largest one is the full video in the best quality
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(files)) as ex:
+            sizes = list(ex.map(lambda u: direct_size(u, referer), files))
+        if max(sizes) > 0:
+            return files[sizes.index(max(sizes))]
+    return real[-1] if real else ""
 
 
 def is_blocked_host(url: str) -> bool:
@@ -239,6 +282,7 @@ if HAVE_WEB:
             super().__init__(parent)
             self.found: list = []
             self.n = 0
+            self.page_url = url
             self.view = QWebEngineView()
             page = MediaPage(profile, self.view)
             page.sniffed.connect(self._seen)
@@ -284,19 +328,39 @@ if HAVE_WEB:
                     "console.log('GRABWAVE-SNIFF:'+u);}});")
             except Exception:
                 pass
-            if (self.found and self.n >= 5) or self.n >= 25:
+            real = [u for u in self.found if not is_preview(u)]
+            if (real and self.n >= 6) or self.n >= 25:
                 self.stop(True)
 
         def stop(self, emit: bool = True):
             self.timer.stop()
-            best = pick_best_media(self.found)
             try:
                 self.view.setPage(None)
             except Exception:
                 pass
             self.view.deleteLater()
-            if emit:
-                self.finished.emit(best)
+            if not emit:
+                return
+            import threading
+            result: list = []
+            found, ref = list(self.found), self.page_url
+
+            def work():
+                try:
+                    result.append(pick_best_media(found, ref, True))
+                except Exception:  # noqa: BLE001
+                    result.append(found[-1] if found else "")
+
+            threading.Thread(target=work, daemon=True).start()
+            poll = QtCore.QTimer(self)
+
+            def check():
+                if result:
+                    poll.stop()
+                    self.finished.emit(result[0])
+
+            poll.timeout.connect(check)
+            poll.start(150)
 
 ACCENT, RED, GRAY = UI.ACCENT, UI.RED, UI.GRAY
 
@@ -859,6 +923,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tick()
         urls = self._clipboard_urls()  # a link already on the clipboard: show it in the paste bar
         self.browser.home.set_clipboard_url(urls[0] if urls else "")
+        QtCore.QTimer.singleShot(15000, rollback.mark_healthy)  # the new version started fine
+        QtWidgets.QApplication.instance().aboutToQuit.connect(rollback.mark_healthy)
         if self.cfg.auto_engine:
             QtCore.QTimer.singleShot(9000, self._auto_engine)
         if self.cfg.check_updates:  # a few seconds after opening, quietly look for a newer version
@@ -1346,7 +1412,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.mgr.resume(it)
         elif it.status == "Completed":
             if it.path and os.path.exists(it.path):
-                open_path(it.path)
+                self._play(it.path, it.title)
         else:
             self.mgr.request_stop(it, "pause")
 
@@ -1421,7 +1487,18 @@ class MainWindow(QtWidgets.QMainWindow):
     # --- shelf actions ------------------------------------------------------------
     def _shelf_open(self, it: E.Item):
         if it.path and os.path.exists(it.path):
-            open_path(it.path)
+            self._play(it.path, it.title)
+
+    def _play(self, path: str, title: str = ""):
+        """Play in Grabwave's own player (it can play H.264, which the built-in browser can't); if Qt's media
+        player isn't available, hand the file to the computer's default video player instead."""
+        try:
+            dlg = UI.PlayerDialog(path, title, None)
+        except Exception:  # noqa: BLE001
+            open_path(path)
+            return
+        self._players = [p for p in getattr(self, "_players", []) if p.isVisible()] + [dlg]
+        dlg.show()
 
     def _shelf_folder(self, it: E.Item):
         if it.path and os.path.exists(it.path):
