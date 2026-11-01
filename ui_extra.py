@@ -32,7 +32,7 @@ GRAY = MUTED
 
 SITE_DOTS = {"YouTube": "#d9482b", "Vimeo": "#2a9fd1", "Facebook": "#2d6fd6", "Instagram": "#c13584",
              "TikTok": "#26231f", "Twitch": "#7a4fd1", "Dailymotion": "#2d6fd6", "Bilibili": "#00a1d6",
-             "SoundCloud": "#e07b00"}
+             "SoundCloud": "#e07b00", "X": "#26231f"}
 POSTER_COLORS = ["#e6dccb", "#dbc9b4", "#cfd8cf", "#d4d0e0", "#e0cfcf", "#d3dde3"]
 
 
@@ -708,13 +708,19 @@ class AddSiteDialog(QtWidgets.QDialog):
         self.url.textChanged.connect(self._check)
 
     def _check(self):
-        self.done.setEnabled(bool(self.name.text().strip() and self.url.text().strip()))
+        self.done.setEnabled(bool(self.url.text().strip()))
 
     def values(self):
         u = self.url.text().strip()
         if u and "://" not in u:
             u = "https://" + u
-        return self.name.text().strip(), u
+        name = self.name.text().strip()
+        if not name and u:  # no name typed: use the site's own name (x.com -> X)
+            host = urlparse(u).netloc.lower()
+            host = host[4:] if host.startswith("www.") else host
+            base = host.split(".")[0] if host else u
+            name = base.upper() if len(base) <= 2 else base.capitalize()
+        return name, u
 
 
 class HomePage(QtWidgets.QWidget):
@@ -726,7 +732,7 @@ class HomePage(QtWidgets.QWidget):
         ("Facebook", "https://www.facebook.com"), ("Instagram", "https://www.instagram.com"),
         ("TikTok", "https://www.tiktok.com"), ("Twitch", "https://www.twitch.tv"),
         ("Dailymotion", "https://www.dailymotion.com"), ("Bilibili", "https://www.bilibili.com"),
-        ("SoundCloud", "https://soundcloud.com"),
+        ("SoundCloud", "https://soundcloud.com"), ("X", "https://x.com"),
     ]
 
     def __init__(self, cfg: E.Config):
