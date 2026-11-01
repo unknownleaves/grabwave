@@ -20,7 +20,7 @@ import engine as E
 import ui_extra as UI
 import updater as U
 
-VERSION = "2.7"
+VERSION = "2.8"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
