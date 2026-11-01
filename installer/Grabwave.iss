@@ -1,6 +1,6 @@
 ; Inno Setup script: turns dist\Grabwave (the PyInstaller folder) + ffmpeg into one Grabwave-Setup-<version>.exe
 #ifndef MyAppVersion
-  #define MyAppVersion "2.8"
+  #define MyAppVersion "2.9"
 #endif
 
 [Setup]
@@ -45,6 +45,18 @@ Filename: "{app}\Grabwave.exe"; Flags: nowait; Check: RelaunchAfterUpdate
 function RelaunchAfterUpdate: Boolean;
 begin
   Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
+// The browser engine leaves small helper programs without windows, and Windows can't close those on its own.
+// End Grabwave and its helpers just before files are replaced, so updates never get stuck on "applications in use".
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM Grabwave.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM QtWebEngineProcess.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Sleep(1200);
+  Result := '';
 end;
 
 // On uninstall, offer to remove settings, the download queue and browser sign-ins too.
