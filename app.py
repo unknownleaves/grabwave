@@ -20,7 +20,7 @@ import engine as E
 import ui_extra as UI
 import updater as U
 
-VERSION = "2.8"
+VERSION = "2.9"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -1565,6 +1565,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _quit_app(self):
         self._quitting = True
         self.close()
+        # make sure no helper process of the browser engine is left holding files (an update needs them free)
+        QtCore.QTimer.singleShot(4000, lambda: os._exit(0))
 
     def _show_details(self, it: E.Item):
         try:
