@@ -559,10 +559,16 @@ def _download_once(item: Item, cfg: Config, url: str, referer: str, is_alt: bool
 
     outdir = item.outdir or cfg.download_dir
     Path(outdir).mkdir(parents=True, exist_ok=True)
+    # Work in a folder on the local drive and move the finished file to the chosen folder. Network/cloud
+    # drives (and very long paths) often fail on the many small temporary pieces a download creates.
+    tmpdir = config_dir() / "tmp" / item.id
+    tmpdir.mkdir(parents=True, exist_ok=True)
     opts = _common_ydl_opts(cfg, use_cookies, item.quality)
-    opts["outtmpl"] = str(Path(outdir) / "%(title).110B [%(id).24B].%(ext)s")  # short: Windows paths max out at 260
+    opts["paths"] = {"home": str(outdir), "temp": str(tmpdir)}
+    default_tmpl = "%(title).110B [%(id).24B].%(ext)s"  # short: Windows paths max out at 260
+    opts["outtmpl"] = default_tmpl
     if item.filename:
-        opts["outtmpl"] = str(Path(outdir) / (item.filename.replace("%", "%%") + ".%(ext)s"))
+        opts["outtmpl"] = item.filename.replace("%", "%%") + ".%(ext)s"
     if referer:
         hdr = {"Referer": referer}
         if is_alt:
@@ -571,8 +577,19 @@ def _download_once(item: Item, cfg: Config, url: str, referer: str, is_alt: bool
                 hdr["Origin"] = f"{p.scheme}://{p.netloc}"
         opts["http_headers"] = hdr
     opts["progress_hooks"] = [_make_hook(item)]
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as e:  # noqa: BLE001
+        # file-name trouble (odd characters, emoji, a drive that refuses the name): retry with a plain name
+        msg = str(e)
+        if item.stop.is_set() or not ("Errno 2" in msg or "Errno 22" in msg or "No such file" in msg
+                                      or "Invalid argument" in msg):
+            raise  # (partial files stay in the local work folder so Resume can continue them)
+        opts["outtmpl"] = "%(id).40B.%(ext)s"
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    shutil.rmtree(tmpdir, ignore_errors=True)  # finished: the work folder is no longer needed
     if info and not item.filename:
         item.title = info.get("title") or item.title
     if info:
@@ -849,7 +866,12 @@ def _worker(item: Item, cfg: Config) -> None:
             item.status = "Failed"
             item.error = _ANSI.sub("", str(e))[:3000]
             low = item.url.lower()
-            if ("x.com/" in low or "twitter.com/" in low) and not item.alt_url:
+            file_trouble = "Errno" in item.error or "No such file" in item.error
+            if file_trouble:
+                item.error += ("\n\nHint: Windows couldn't save the file in that folder. Try a folder on your "
+                               "main drive (Settings or the Change button next to Save to). Network and cloud "
+                               "drives sometimes refuse downloads.")
+            if ("x.com/" in low or "twitter.com/" in low) and not item.alt_url and not file_trouble:
                 item.error += ("\n\nHint: X shows many videos only to signed-in accounts (adult/sensitive posts, "
                                "age-restricted posts). In the Browse tab open x.com, sign in once, then add the "
                                "link again. Grabwave reuses that sign-in. Posts that were deleted, or are from a "
