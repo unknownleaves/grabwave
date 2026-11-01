@@ -197,6 +197,26 @@ if HAVE_WEB:
         mediaFound = QtCore.Signal(dict)
         sniffed = QtCore.Signal(str)
 
+        _popups: list = []
+
+        def createWindow(self, wtype):
+            """Sign-in buttons ("Continue with Google/Apple") open a small pop-up window. Give it a real
+            window that shares this page's sign-ins, and close it when the site asks."""
+            dlg = QtWidgets.QDialog(self.view().window() if self.view() else None)
+            dlg.setWindowTitle("Sign in")
+            dlg.resize(520, 700)
+            lay = QtWidgets.QVBoxLayout(dlg)
+            lay.setContentsMargins(0, 0, 0, 0)
+            view = QWebEngineView(dlg)
+            page = QWebEnginePage(self.profile(), view)
+            view.setPage(page)
+            lay.addWidget(view)
+            page.windowCloseRequested.connect(dlg.close)
+            MediaPage._popups.append(dlg)
+            dlg.finished.connect(lambda _=0, d=dlg: MediaPage._popups.remove(d) if d in MediaPage._popups else None)
+            dlg.show()
+            return page
+
         def javaScriptConsoleMessage(self, level, message, line, source):
             if message.startswith("GRABWAVE-SNIFF:"):
                 self.sniffed.emit(message[len("GRABWAVE-SNIFF:"):])
