@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [("assets", "assets"), ("THIRD_PARTY.md", ".")]
 binaries = []
-hiddenimports = ["ui_extra", "updater", "rollback", "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets"]
+hiddenimports = ["engine", "ui_extra", "updater", "rollback", "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets"]
 
 # Packages that load plugins/data at run time need everything collected. Missing optional ones are skipped.
 for pkg in ("yt_dlp", "streamlink", "curl_cffi", "certifi", "websockets", "brotli", "mutagen",
