@@ -1,5 +1,8 @@
-Grabwave 2.7
-- New look: Paper Desk theme, wave progress, mascot, stamps.
-- Shelf, Watchlist (auto-record when a room goes live), smart paste, Performance modes.
-- Updates: Grabwave now offers new versions when it opens (Help menu > Check for updates).
-- Fixes: hidden helper windows, long file names, X links, automatic page capture fallback.
+Grabwave 2.8
+- New Help menu: Check for updates, Quick guide, About.
+- "Fix it": the retry button on a failed download now tries every route again.
+- The video engine keeps itself up to date in the background.
+- Cleaner bottom bar: format and quality are one small button.
+- Downloads are assembled on your main drive, which fixes saving to network drives.
+- Sign-in pop-ups (Continue with Google or Apple) now open in the built-in browser.
+- X is now one of the shortcuts, and adding a shortcut only needs a web address.
