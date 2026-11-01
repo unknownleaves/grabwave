@@ -1,6 +1,6 @@
 ; Inno Setup script: turns dist\Grabwave (the PyInstaller folder) + ffmpeg into one Grabwave-Setup-<version>.exe
 #ifndef MyAppVersion
-  #define MyAppVersion "2.10"
+  #define MyAppVersion "2.11"
 #endif
 
 [Setup]
