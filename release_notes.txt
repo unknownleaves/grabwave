@@ -1,8 +1,3 @@
-Grabwave 2.8
-- New Help menu: Check for updates, Quick guide, About.
-- "Fix it": the retry button on a failed download now tries every route again.
-- The video engine keeps itself up to date in the background.
-- Cleaner bottom bar: format and quality are one small button.
-- Downloads are assembled on your main drive, which fixes saving to network drives.
-- Sign-in pop-ups (Continue with Google or Apple) now open in the built-in browser.
-- X is now one of the shortcuts, and adding a shortcut only needs a web address.
+Grabwave 2.9
+- Updates install more reliably and keep a log if something goes wrong.
+- Everything from 2.8 (Help menu, Fix it, background engine updates, cleaner bottom bar).
