@@ -1321,6 +1321,144 @@ def fmt_dur(sec: float | None) -> str:
 
 
 # ============================================================================================
+# Watch: play a page's video inside Grabwave even where the built-in browser can't (H.264)
+#   resolve_stream() asks yt-dlp for the direct video address(es) without downloading,
+#   StreamRelay hands them to ffmpeg and serves the result on a private local address,
+#   and the player window (Qt's own media player, which can decode H.264) plays that address.
+# ============================================================================================
+def resolve_stream(url: str, cfg: Config, alt_url: str = "", alt_referer: str = "") -> dict:
+    """Returns {"inputs": [address, ...], "headers": {...}, "title": str} for the video on a page."""
+    errors = []
+    if url.lower().startswith(("http://", "https://")):
+        try:
+            import yt_dlp
+            opts = _common_ydl_opts(cfg, True, "")
+            opts["format"] = "b[height<=1080]/bv*[height<=1080]+ba/b/bv*+ba"
+            opts["skip_download"] = True
+            opts.pop("postprocessors", None)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(_normalize_url(url), download=False)
+                if info and info.get("entries"):
+                    info = next((x for x in info["entries"] if x), info)
+                fmts = info.get("requested_formats") or [info]
+                inputs = [f["url"] for f in fmts if f.get("url")]
+                if inputs:
+                    headers = dict(info.get("http_headers") or {})
+                    for f in fmts:
+                        headers.update(f.get("http_headers") or {})
+                    try:
+                        ck = ydl.cookiejar.get_cookie_header(inputs[0])
+                        if ck:
+                            headers["Cookie"] = ck
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return {"inputs": inputs[:2], "headers": headers, "title": info.get("title") or ""}
+        except Exception as ex:  # noqa: BLE001
+            errors.append(_ANSI.sub("", str(ex))[:200])
+        try:  # sites built on the KVS script (the page lists its own video addresses)
+            cands = kvs_candidates(url)
+            if cands:
+                return {"inputs": [cands[0]], "headers": {"Referer": url, "User-Agent": browser_ua() or "Mozilla/5.0"},
+                        "title": ""}
+        except Exception:  # noqa: BLE001
+            pass
+    if alt_url:  # a stream address the built-in browser saw
+        return {"inputs": [alt_url], "headers": {"Referer": alt_referer or url,
+                                                  "User-Agent": browser_ua() or "Mozilla/5.0"}, "title": ""}
+    raise RuntimeError(errors[0] if errors else "Couldn't find a video on this page.")
+
+
+class StreamRelay:
+    """Serves the video from `inputs` as one stream on http://127.0.0.1:<port>/video.mkv.
+    ffmpeg copies the picture untouched and only re-encodes the sound (cheap), so playback is smooth."""
+
+    def __init__(self, inputs: list, headers: dict, cfg: Config):
+        self.inputs, self.headers, self.cfg = list(inputs), dict(headers), cfg
+        self.server = None
+        self.procs: list = []
+        self._lock = threading.Lock()
+
+    def _command(self) -> list:
+        ff = find_ffmpeg()
+        if not ff:
+            raise RuntimeError("ffmpeg not found")
+        hdr = "".join(f"{k}: {v}\r\n" for k, v in self.headers.items() if k.lower() != "accept-encoding")
+        cmd = [ff, "-loglevel", "error", "-nostdin"]
+        if self.cfg.proxy:
+            cmd += ["-http_proxy", self.cfg.proxy]
+        for u in self.inputs:
+            cmd += ["-headers", hdr, "-i", u]
+        if len(self.inputs) == 2:
+            cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+        else:
+            cmd += ["-map", "0:v:0?", "-map", "0:a:0?"]
+        return cmd + ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-f", "matroska", "pipe:1"]
+
+    def start(self) -> str:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        relay = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def log_message(self, *a):  # keep quiet
+                pass
+
+            def _head(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "video/x-matroska")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+
+            def do_HEAD(self):
+                self._head()
+
+            def do_GET(self):
+                try:
+                    proc = subprocess.Popen(relay._command(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                except Exception:  # noqa: BLE001
+                    self.send_error(500)
+                    return
+                with relay._lock:
+                    relay.procs.append(proc)
+                try:
+                    self._head()
+                    while True:
+                        chunk = proc.stdout.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionError, OSError):
+                    pass
+                finally:
+                    try:
+                        proc.kill()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        return f"http://127.0.0.1:{self.server.server_port}/video.mkv"
+
+    def stop(self) -> None:
+        with self._lock:
+            for p in self.procs:
+                try:
+                    p.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            self.procs.clear()
+        if self.server is not None:
+            try:
+                self.server.shutdown()
+                self.server.server_close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.server = None
+
+
+# ============================================================================================
 # Live-cam sites (public rooms only)
 # Direct stream resolvers for a few live-cam sites (public rooms only).
 #

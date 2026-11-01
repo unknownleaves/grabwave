@@ -1662,11 +1662,12 @@ class UpdateDialog(QtWidgets.QDialog):
 class PlayerDialog(QtWidgets.QDialog):
     """Plays a finished download inside Grabwave with Qt's own media player."""
 
-    def __init__(self, path: str, title: str = "", parent=None):
+    def __init__(self, path: str, title: str = "", parent=None, relay=None):
         super().__init__(parent)
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
         from PySide6.QtMultimediaWidgets import QVideoWidget
         self.path = path
+        self.relay = relay  # live stream from E.StreamRelay (None when playing a saved file)
         self.setWindowTitle(title or os.path.basename(path))
         self.resize(960, 600)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
@@ -1707,6 +1708,7 @@ class PlayerDialog(QtWidgets.QDialog):
         ext = QtWidgets.QPushButton("Open in your player")
         ext.setObjectName("small")
         ext.clicked.connect(self._external)
+        ext.setVisible(relay is None)
         h.addWidget(ext)
         lay.addWidget(bar)
 
@@ -1723,7 +1725,10 @@ class PlayerDialog(QtWidgets.QDialog):
         vol.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
         self.play_btn.clicked.connect(self._toggle)
         self.full_btn.clicked.connect(self._fullscreen)
-        self.player.setSource(QtCore.QUrl.fromLocalFile(path))
+        if relay is not None or path.lower().startswith(("http://", "https://")):
+            self.player.setSource(QtCore.QUrl(path))
+        else:
+            self.player.setSource(QtCore.QUrl.fromLocalFile(path))
         self.player.play()
 
     @staticmethod
@@ -1789,4 +1794,9 @@ class PlayerDialog(QtWidgets.QDialog):
             self.player.stop()
         except Exception:
             pass
+        if self.relay is not None:  # stop ffmpeg and the private local address
+            try:
+                self.relay.stop()
+            except Exception:
+                pass
         super().closeEvent(e)

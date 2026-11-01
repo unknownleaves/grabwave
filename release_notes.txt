@@ -1,7 +1,8 @@
-Grabwave 2.11
-- Built-in video player: double-click a video on the Shelf to watch it inside Grabwave, including formats the browser tab can't play.
+Grabwave 2.12
+- New Watch button in the Browse tab: play the video of the page you're on inside Grabwave, including H.264 videos the browser tab can't show.
+- Built-in video player for downloaded files (double-click a video on the Shelf).
 - More ways to save a video: if one method fails, Grabwave now tries the next (page video list, captured stream, ffmpeg copy, gallery-dl).
 - Fixes pages that only gave a short preview clip instead of the full video.
 - Safer updates: if a new version can't start, Grabwave puts the previous one back.
 - Faster downloads in Maximum mode (16 pieces at once).
-- The installer now closes Grabwave's background programs itself, so updates don't get stuck.
+- Publisher name and version details added to the program.

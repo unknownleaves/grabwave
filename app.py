@@ -24,7 +24,7 @@ import engine as E
 import ui_extra as UI
 import updater as U
 
-VERSION = "2.11"
+VERSION = "2.12"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -381,6 +381,7 @@ def open_path(p: str) -> None:
 class BrowserPane(QtWidgets.QWidget):
     addRequested = QtCore.Signal(str)
     mediaFound = QtCore.Signal(dict)
+    watchRequested = QtCore.Signal(str, str)  # page address, stream address the browser saw (or "")
 
     def __init__(self, cfg: E.Config):
         super().__init__()
@@ -419,6 +420,7 @@ class BrowserPane(QtWidgets.QWidget):
         self.url.setPlaceholderText("Search or enter a web address")
         self.url.returnPressed.connect(lambda: self.navigate(self.url.text()))
         bar.addWidget(self.url, 1)
+        self.b_watch = btn("play", "Watch the video on this page in Grabwave's player", self._emit_watch)
         self.b_add = btn("download", "Grab the video on this page", self._emit_add, "grab")
         self.b_ext = btn("external", "Open in your default browser", self._open_external)
         lay.addLayout(bar)
@@ -497,6 +499,12 @@ class BrowserPane(QtWidgets.QWidget):
         if self.web is not None and self.stack.currentWidget() is self.web:
             return self.web.url().toString()
         return self.url.text().strip()
+
+    def _emit_watch(self):
+        u = self.current_url()
+        if not u.lower().startswith(("http://", "https://")):
+            return
+        self.watchRequested.emit(u, self.best_media() if self.web is not None else "")
 
     def _emit_add(self):
         u = self.current_url()
@@ -839,6 +847,8 @@ class TrayView(QtWidgets.QListView):
 class MainWindow(QtWidgets.QMainWindow):
     toolFinished = QtCore.Signal(object, str, str)  # source item, new file, error text
     updateChecked = QtCore.Signal(object, str, bool)  # update entry or None, error text, asked by the user
+    watchReady = QtCore.Signal(object, str, str)  # relay, stream address, title
+    watchFailed = QtCore.Signal(str)
 
     def __init__(self, mgr: E.Manager):
         super().__init__()
@@ -863,6 +873,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.watcher.wentLive.connect(self._went_live)
         self.toolFinished.connect(self._on_tool)
         self.updateChecked.connect(self._on_update_checked)
+        self.watchReady.connect(self._on_watch_ready)
+        self.watchFailed.connect(self._on_watch_failed)
         self._update_open = False
 
         central = QtWidgets.QWidget()
@@ -878,6 +890,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.browser = BrowserPane(self.cfg)
         self.browser.addRequested.connect(self._add_from_browser)
         self.browser.mediaFound.connect(self._add_media)
+        self.browser.watchRequested.connect(self._watch)
         self.browser.home.grabRequested.connect(lambda u: self._add_url(u))
         self.shelf = UI.ShelfPage(mgr, self.thumbs)
         self.shelf.openRequested.connect(self._shelf_open)
@@ -1488,6 +1501,37 @@ class MainWindow(QtWidgets.QMainWindow):
     def _shelf_open(self, it: E.Item):
         if it.path and os.path.exists(it.path):
             self._play(it.path, it.title)
+
+    # --- Watch: play the video of a page in Grabwave's own player (handles H.264) --------------
+    def _watch(self, url: str, alt: str):
+        import threading
+        self.statusBar().showMessage("Opening the video…", 8000)
+
+        def work():
+            try:
+                info = E.resolve_stream(url, self.cfg, alt, url)
+                relay = E.StreamRelay(info["inputs"], info["headers"], self.cfg)
+                self.watchReady.emit(relay, relay.start(), info.get("title") or "")
+            except Exception as ex:  # noqa: BLE001
+                self.watchFailed.emit(str(ex))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_watch_ready(self, relay, stream_url: str, title: str):
+        try:
+            dlg = UI.PlayerDialog(stream_url, title or "Grabwave player", None, relay)
+        except Exception as ex:  # noqa: BLE001
+            relay.stop()
+            self._on_watch_failed(f"The built-in player isn't available ({ex}).")
+            return
+        self._players = [p for p in getattr(self, "_players", []) if p.isVisible()] + [dlg]
+        dlg.show()
+
+    def _on_watch_failed(self, msg: str):
+        QtWidgets.QMessageBox.information(
+            self, "Watch",
+            "Couldn't open the video in Grabwave's player.\n\n" + (msg or "No video found on this page.") +
+            "\n\nYou can still save it with the red download button, then play it from the Shelf.")
 
     def _play(self, path: str, title: str = ""):
         """Play in Grabwave's own player (it can play H.264, which the built-in browser can't); if Qt's media
