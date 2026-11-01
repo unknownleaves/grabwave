@@ -19,6 +19,24 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force ffmpeg | Out-Null
           python -c "import shutil,imageio_ffmpeg;shutil.copy(imageio_ffmpeg.get_ffmpeg_exe(),'ffmpeg/ffmpeg.exe')"
+      - name: Check that every source file is present and valid
+        shell: python
+        run: |
+          import py_compile, sys
+          from pathlib import Path
+          need = ["app.py", "engine.py", "ui_extra.py", "updater.py", "rollback.py", "Grabwave.spec", "VERSION_PLACEHOLDER"]
+          need.remove("VERSION_PLACEHOLDER")
+          bad = [f for f in need if not Path(f).is_file()]
+          for f in need:
+              if f.endswith(".py") and Path(f).is_file():
+                  try:
+                      py_compile.compile(f, doraise=True)
+                  except Exception as e:
+                      bad.append(f"{f}: {e}")
+          if bad:
+              print("PROBLEM WITH THESE FILES:", *bad, sep="\n  ")
+              sys.exit(1)
+          print("all source files present and valid")
       - run: pyinstaller --noconfirm --clean Grabwave.spec
       - name: Build installer
         shell: pwsh
