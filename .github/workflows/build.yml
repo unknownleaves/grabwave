@@ -79,9 +79,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: Grabwave-Linux-AppImage, path: dist/Grabwave-x86_64.AppImage }
   release:
-    # Publishes whatever built successfully as a Release (a normal download page, no zip files).
+    # Publishes a Release (a normal download page, no zip files) only when the Windows and Linux builds both worked.
+    # (The Mac build may fail without blocking.) A half-finished release can't be fixed later, so we don't create one.
     needs: [windows, macos, linux]
-    if: ${{ !cancelled() && (needs.windows.result == 'success' || needs.linux.result == 'success') }}
+    if: ${{ !cancelled() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +114,19 @@ jobs:
           (folder / "latest.json").write_text(json.dumps(manifest, indent=2), "utf-8")
           print(json.dumps(manifest, indent=2))
           PY
+      - name: Has this version already been published?
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$VER" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Version $VER is already published::GitHub does not allow a published release to be changed. Raise VERSION in app.py (and MyAppVersion in installer/Grabwave.iss) to make a new release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: softprops/action-gh-release@v2
+        if: steps.existing.outputs.exists == 'false'
         with:
           tag_name: v${{ env.VER }}
           name: Grabwave ${{ env.VER }}
