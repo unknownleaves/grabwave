@@ -3,126 +3,106 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Grabwave: download videos and record live streams</title>
-<meta name="description" content="Grabwave downloads videos and records live streams, up to 20 at a time, from a simple built-in browser.">
-<link rel="icon" href="grabwave.png">
-<style>
-  :root {
-    --bg: #ffffff; --ink: #17151f; --muted: #5d5a6b; --line: #e7e4f1; --card: #f6f4fc;
-    --accent: #5b3df5; --accent-ink: #ffffff; --accent-soft: #ece8ff;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #15131c; --ink: #f2f0fa; --muted: #a8a4ba; --line: #2b2837; --card: #1e1b29; --accent: #8a72ff; --accent-ink: #12101a; --accent-soft: #2a2542; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
-  header { padding: 22px 0; }
-  .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 20px; }
-  .brand img { width: 36px; height: 36px; border-radius: 9px; }
-  .hero { text-align: center; padding: 56px 0 40px; }
-  .hero img.big { width: 104px; height: 104px; border-radius: 24px; box-shadow: 0 10px 30px rgba(91,61,245,.28); }
-  h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.15; margin: 24px 0 14px; letter-spacing: -.02em; }
-  .lead { color: var(--muted); font-size: 18px; max-width: 600px; margin: 0 auto 30px; }
-  .btn { display: inline-block; background: var(--accent); color: var(--accent-ink); text-decoration: none; font-weight: 650; font-size: 18px; padding: 15px 30px; border-radius: 12px; }
-  .btn:hover { filter: brightness(1.08); }
-  .btn:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
-  .sub { color: var(--muted); font-size: 14px; margin-top: 12px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin: 20px 0 8px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
-  .card.you { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-  .card h3 { margin: 0 0 4px; font-size: 19px; }
-  .card .file { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
-  .card a.dl { display: inline-block; background: var(--accent-soft); color: var(--accent); text-decoration: none; font-weight: 650; padding: 9px 16px; border-radius: 9px; margin-bottom: 16px; }
-  .card ol { margin: 0; padding-left: 20px; color: var(--muted); font-size: 15px; }
-  .card li { margin-bottom: 6px; }
-  h2 { font-size: 26px; margin: 56px 0 8px; letter-spacing: -.01em; }
-  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 22px; margin-top: 18px; }
-  .features h4 { margin: 0 0 4px; font-size: 17px; }
-  .features p { margin: 0; color: var(--muted); font-size: 15px; }
-  .note { background: var(--accent-soft); border-radius: 14px; padding: 18px 20px; margin-top: 28px; font-size: 15px; }
-  footer { border-top: 1px solid var(--line); margin-top: 64px; padding: 26px 0 40px; color: var(--muted); font-size: 14px; }
-</style>
+<title>Grabwave: save videos and record live streams</title>
+<meta name="description" content="Grabwave is a desktop app that saves videos and records live streams from hundreds of sites. 14-day free trial, one-time license.">
+<link rel="icon" href="grabwave.png"><link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="wrap">
-  <header><div class="brand"><img src="grabwave.png" alt=""> Grabwave</div></header>
-
-  <section class="hero">
-    <img class="big" src="grabwave.png" alt="Grabwave icon">
-    <h1>Save videos. Record live streams.</h1>
-    <p class="lead">Grabwave downloads videos and records live streams, up to 20 at a time, from a simple built-in browser.</p>
-    <a id="main-btn" class="btn" href="#downloads">Download</a>
-    <div id="main-sub" class="sub">Free for Windows, macOS and Linux</div>
-  </section>
-
-  <section id="downloads">
-    <h2>Download</h2>
-    <div class="grid">
-      <div class="card" data-os="windows">
-        <h3>Windows</h3>
-        <div class="file">Windows 10 or 11 · installer (.exe)</div>
-        <a class="dl" href="https://github.com/unknownleaves/grabwave/releases/latest/download/Grabwave-Setup.exe">Download for Windows</a>
-        <ol>
-          <li>Open the file you downloaded.</li>
-          <li>If Windows shows "protected your PC", click <b>More info</b>, then <b>Run anyway</b>.</li>
-          <li>Follow the steps, then click <b>Finish</b>. Grabwave opens.</li>
-        </ol>
-      </div>
-      <div class="card" data-os="mac">
-        <h3>macOS</h3>
-        <div class="file">Apple Silicon Macs · disk image (.dmg)</div>
-        <a class="dl" href="https://github.com/unknownleaves/grabwave/releases/latest/download/Grabwave.dmg">Download for Mac</a>
-        <ol>
-          <li>Open the downloaded file.</li>
-          <li>Drag <b>Grabwave</b> onto <b>Applications</b>.</li>
-          <li>First time only: right-click Grabwave in Applications and choose <b>Open</b>.</li>
-        </ol>
-      </div>
-      <div class="card" data-os="linux">
-        <h3>Linux</h3>
-        <div class="file">64-bit · single file (.AppImage)</div>
-        <a class="dl" href="https://github.com/unknownleaves/grabwave/releases/latest/download/Grabwave-x86_64.AppImage">Download for Linux</a>
-        <ol>
-          <li>Right-click the file, open <b>Properties</b>, and allow it to run as a program.</li>
-          <li>Double-click it. Nothing else to install.</li>
-        </ol>
-      </div>
-    </div>
-    <div class="note">Grabwave is not yet signed with a paid developer certificate, so Windows and macOS show a one-time warning the first time you open it. The steps above get you past it.</div>
-  </section>
-
-  <section>
-    <h2>What it does</h2>
-    <div class="features">
-      <div><h4>Built-in browser</h4><p>Browse a site, then click the Download button that appears on the video.</p></div>
-      <div><h4>Live recording</h4><p>Record live streams. Grabwave waits for a stream to start and saves it as it plays.</p></div>
-      <div><h4>Up to 20 at once</h4><p>Queue as many as you like. Twenty download or record at the same time.</p></div>
-      <div><h4>Stays up to date</h4><p>One click in Settings refreshes the download engine when a site changes.</p></div>
-    </div>
-  </section>
-
-  <footer>Grabwave only saves content you have the right to save. Respect each site's terms and local laws.</footer>
+  <header>
+    <a class="logo" href="#">grabwave</a>
+    <nav><a href="#features">Features</a><a href="#how">How it works</a><a href="guides/index.html">Guides</a><a href="#faq">FAQ</a><a class="keep" href="#price">Pricing</a></nav>
+  </header>
 </div>
+<svg class="wave" viewBox="0 0 1180 12" preserveAspectRatio="none" aria-hidden="true"><path d="M0 6 Q 37 -2 74 6 T 148 6 T 222 6 T 296 6 T 370 6 T 444 6 T 518 6 T 592 6 T 666 6 T 740 6 T 814 6 T 888 6 T 962 6 T 1036 6 T 1110 6 T 1184 6" fill="none" stroke="var(--acc)" stroke-width="2" opacity=".55"/></svg>
 
+<main class="wrap">
+  <div class="hero">
+    <div>
+      <h1>Save the videos you want. Record the streams you'd miss.</h1>
+      <p class="lead">Grabwave is a desktop app for Windows, Mac and Linux. Paste a link, pick a quality, and it saves the video to your computer. Or let it record a live stream while you're away.</p>
+      <div class="btns">
+        <a class="btn primary" id="dl" href="download.html">Download free trial</a>
+        <a class="btn" href="#price">Buy a license</a>
+      </div>
+      <p class="small">14 days free. No account and no card needed to try it.</p>
+    </div>
+    <div class="shot" aria-hidden="true">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <div class="body">
+        <div class="paste"><span>Paste a video link and press Enter</span><b>Grab it</b></div>
+        <div class="card-row"><div class="thumb"></div><div style="flex:1"><b style="font-size:14px">Sample video · 1080p</b><div class="prog"><i></i></div></div></div>
+        <div class="card-row"><div class="thumb"></div><div style="flex:1"><b style="font-size:14px">Live room · recording 00:42:10</b><div class="prog"><i style="width:100%"></i></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <section id="features">
+    <h2>Everything in one calm window</h2>
+    <p class="sub">No ads, no pop-ups, no command line. It looks and feels like any other app on your computer.</p>
+    <div class="grid">
+      <div class="feat"><h3>Hundreds of sites</h3><p>Video sites, social platforms and more. Grabwave keeps its download engine up to date in the background.</p></div>
+      <div class="feat"><h3>Live recording</h3><p>Record a live stream until it ends. A watchlist can start recording the moment a favourite channel goes live.</p></div>
+      <div class="feat"><h3>Built-in player</h3><p>Watch your saved videos right inside Grabwave, and trim or convert them to MP3 or MP4 from the shelf.</p></div>
+      <div class="feat"><h3>Fast and tidy</h3><p>Run up to 20 downloads at once, or pick Balanced or Light mode when you need your computer for other things.</p></div>
+      <div class="feat"><h3>Updates itself</h3><p>When a new version is ready, Grabwave offers to update. One click and it installs and reopens.</p></div>
+      <div class="feat"><h3>Private</h3><p>No accounts and no tracking. Your links and downloads stay on your computer.</p></div>
+    </div>
+  </section>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="sub">Three steps, the first time and every time.</p>
+    <div class="steps">
+      <div class="step"><b>Paste a link</b><span>Copy a link from anywhere. Grabwave offers to grab it, or paste it into the box.</span></div>
+      <div class="step"><b>Choose a quality</b><span>Best, 1080p, 720p or audio only. Your choice is remembered.</span></div>
+      <div class="step"><b>Watch it anywhere</b><span>The file lands in your folder as a normal video you can keep, move or share.</span></div>
+    </div>
+  </section>
+
+  <section id="price" class="center">
+    <h2>One price, yours to keep</h2>
+    <p class="sub">Try everything free for 14 days. If Grabwave earns a place on your computer, a license unlocks it for good.</p>
+    <div class="price-box">
+      <b>Grabwave lifetime license</b>
+      <div class="price">$45 <small>one time</small></div>
+      <ul>
+        <li>Unlimited downloads and recordings</li>
+        <li>All future updates for this version line</li>
+        <li>Works on Windows, Mac and Linux</li>
+        <li>License key delivered by email right after purchase</li>
+      </ul>
+      <a class="btn primary" id="buy" style="width:100%" href="#buy-link">Buy now</a>
+      <p class="note" style="margin:12px 0 0">Prefer to try first? <a href="https://github.com/unknownleaves/grabwave/releases/latest">Download the free trial</a>.</p>
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2>Questions</h2>
+    <p class="sub">The short, honest answers.</p>
+    <details><summary>What happens when the trial ends?</summary><p>New downloads and recordings pause. Everything you already saved stays on your computer and keeps playing. Enter a license key and you're back in business.</p></details>
+    <details><summary>Does it work on every site?</summary><p>Grabwave works with hundreds of sites, but not all of them. Some sites block automated downloads, and protected (DRM) video can't be saved. The engine is updated often, which fixes most breakages quickly.</p></details>
+    <details><summary>Is it legal to use?</summary><p>That depends on what you save and where you live. Only save content you own, that is in the public domain, or that you have permission or a legal right to keep for yourself, and respect the terms of the sites you use.</p></details>
+    <details><summary>How do I get my key?</summary><p>You receive it by email right after you pay. In Grabwave, open Help, choose Enter license key, and paste it in. Keys are checked on your computer, so no internet connection is needed to activate.</p></details>
+    <details><summary>Can I use it on more than one computer?</summary><p>One license is for one person on their own computers. If you replace your computer, just enter your key again.</p></details>
+    <details><summary>Windows says "unrecognized app". Is it safe?</summary><p>Windows shows that screen for new apps that haven't built up a download history yet. Click More info, then Run anyway. Only download Grabwave from this page or its official releases page.</p></details>
+    <details><summary>What about refunds and support?</summary><p>If Grabwave doesn't work for you, write to us within 14 days of buying for a refund. Write to <a href="mailto:support@example.com">support@example.com</a> for help any time.</p></details>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap row">
+    <span>© 2026 Grabwave Software. All rights reserved.</span>
+    <span><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="refund.html">Refunds</a> · <a href="mailto:support@example.com">Contact</a></span>
+  </div>
+</footer>
 <script>
-  // Pick the visitor's system, put its button at the top and highlight its card.
-  (function () {
-    var ua = navigator.userAgent || "", p = (navigator.platform || "").toLowerCase();
-    var os = /Windows/i.test(ua) ? "windows" : /Mac/i.test(ua) || p.indexOf("mac") === 0 ? "mac" : /Linux|X11/i.test(ua) && !/Android/i.test(ua) ? "linux" : null;
-    if (/iPhone|iPad|Android/i.test(ua)) os = null;
-    var names = { windows: "Windows", mac: "Mac", linux: "Linux" };
-    var cards = document.querySelectorAll(".card");
-    if (!os) { document.getElementById("main-sub").textContent = "Pick your system below. Grabwave runs on computers, not phones."; return; }
-    cards.forEach(function (c) {
-      if (c.getAttribute("data-os") === os) {
-        c.classList.add("you");
-        document.getElementById("main-btn").href = c.querySelector("a.dl").href;
-        document.getElementById("main-btn").textContent = "Download for " + names[os];
-        document.getElementById("main-sub").textContent = "Free · " + c.querySelector(".file").textContent;
-      }
-    });
-  })();
+/* Fill these two in when the shop is ready. */
+var BUY_URL = "";            // your checkout page address
+var DOWNLOAD_URL = "";       // leave empty to use the GitHub releases page
+if (BUY_URL) document.getElementById("buy").href = BUY_URL;
+else document.getElementById("buy").addEventListener("click", function(e){ e.preventDefault(); alert("Checkout opens soon. Download the free trial to try Grabwave now."); });
+if (DOWNLOAD_URL) document.getElementById("dl").href = DOWNLOAD_URL;
 </script>
 </body>
 </html>

@@ -22,9 +22,10 @@ from PySide6.QtCore import Qt
 
 import engine as E
 import ui_extra as UI
+import licensing as LIC
 import updater as U
 
-VERSION = "2.12"
+VERSION = "2.15"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -865,17 +866,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self._announced: set = {i.id for i in mgr.items if i.status in ("Completed", "Failed")}
         self._tick_n = 0
         self._auto_tried: set = set()
+        self._live_capture_at: dict = {}
         self._sniffers: list = []
 
         self.thumbs = UI.ThumbCache(self.cfg)
         self.thumbs.ready.connect(lambda _id: self.view.viewport().update())
         self.watcher = UI.Watcher(mgr, self.cfg)
+        self.watcher.allowed = lambda: self._lic.allowed
+        self._lic_timer = QtCore.QTimer(self)
+        self._lic_timer.timeout.connect(self._lic_refresh)
+        self._lic_timer.start(30 * 60 * 1000)
+        QtCore.QTimer.singleShot(0, self._lic_ui)
         self.watcher.wentLive.connect(self._went_live)
         self.toolFinished.connect(self._on_tool)
         self.updateChecked.connect(self._on_update_checked)
         self.watchReady.connect(self._on_watch_ready)
         self.watchFailed.connect(self._on_watch_failed)
         self._update_open = False
+        self._lic = LIC.status()
 
         central = QtWidgets.QWidget()
         central.setObjectName("page")
@@ -970,6 +978,12 @@ class MainWindow(QtWidgets.QMainWindow):
         h.addStretch(1)
         self.mascot = UI.Wavy("sleepy", 34)
         h.addWidget(self.mascot)
+        self.lic_chip = QtWidgets.QPushButton()
+        self.lic_chip.setObjectName("small")
+        self.lic_chip.setCursor(Qt.PointingHandCursor)
+        self.lic_chip.setToolTip("Free trial and license")
+        self.lic_chip.clicked.connect(lambda: self._show_license(False))
+        h.addWidget(self.lic_chip)
         helpb = QtWidgets.QToolButton()
         helpb.setText("Help")
         helpb.setIcon(UI.icon("help", UI.MUTED, 20))
@@ -981,6 +995,10 @@ class MainWindow(QtWidgets.QMainWindow):
         helpb.setPopupMode(QtWidgets.QToolButton.InstantPopup)
         hm = QtWidgets.QMenu(helpb)
         hm.addAction("Check for updates…", lambda: self._check_updates(True))
+        if LIC.enabled():
+            hm.addAction("Enter license key…", lambda: self._show_license(False))
+            if LIC.BUY_URL:
+                hm.addAction("Buy Grabwave…", lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(LIC.BUY_URL)))
         hm.addSeparator()
         hm.addAction("Quick guide", self._guide)
         hm.addAction("Open log / settings folder", lambda: open_path(str(E.config_dir())))
@@ -1243,6 +1261,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.windowTitle() != title:
             self.setWindowTitle(title)
 
+        for it in items:
+            if it.kind == "live" and it.status == "Waiting" and not it.alt_url:
+                self._auto_capture_live(it)
+
         # celebrate what just finished; note what failed
         for it in items:
             if it.running or it.status in ("Downloading", "Recording", "Waiting", "Processing"):
@@ -1281,10 +1303,39 @@ class MainWindow(QtWidgets.QMainWindow):
         sn.finished.connect(lambda best, i=it, s=sn: self._on_capture(i, best, s))
         return True
 
+    def _auto_capture_live(self, it: E.Item) -> None:
+        """A live room whose site refuses Grabwave's own lookup (HTTP 418): quietly open the room page like a
+        browser would and pick up the stream address it loads. Tried again every 90 seconds while waiting,
+        because a room only loads its stream once it is live."""
+        import time as _t
+        from urllib.parse import urlparse
+        if not HAVE_WEB or it.alt_url or "418" not in (it.error or ""):
+            return
+        if not it.url.lower().startswith(("http://", "https://")) or is_blocked_host(it.url):
+            return
+        last = self._live_capture_at.get(it.id, 0.0)
+        if _t.time() - last < 90 or any(getattr(s, "item_id", "") == it.id for s in self._sniffers):
+            return
+        host = (urlparse(it.url).hostname or "").lower()
+        if any(host == h or host.endswith("." + h) for h in NO_AUTO_CAPTURE):
+            return
+        self._live_capture_at[it.id] = _t.time()
+        sn = PageSniffer(self.browser.profile, it.url, self)
+        sn.item_id = it.id
+        self._sniffers.append(sn)
+        sn.finished.connect(lambda best, i=it, s=sn: self._on_capture(i, best, s))
+
     def _on_capture(self, it: E.Item, best: str, sn):
         if sn in self._sniffers:
             self._sniffers.remove(sn)
         sn.deleteLater()
+        if it.kind == "live":  # the recorder is already running and waiting: just hand it the address
+            if best and it not in self.mgr.items:
+                return
+            if best:
+                it.alt_url, it.alt_referer = best, it.url
+                self.statusBar().showMessage("Found the live stream. Starting the recording…", 6000)
+            return
         if best:
             it.alt_url, it.alt_referer = best, it.url
             it.error = ""
@@ -1328,7 +1379,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._add_url(u, announce=False)
         self.statusBar().showMessage(f"Added {len(urls)} link" + ("" if len(urls) == 1 else "s") + " and started", 3000)
 
-    def _add_url(self, u: str, quality: str = "", announce: bool = True) -> E.Item:
+    def _add_url(self, u: str, quality: str = "", announce: bool = True):
+        if not self._gate():
+            return None
         here = self.browser.current_url().rstrip("/")
         kind = "live" if E.cam_detect(u) else "download"
         it = self.mgr.add(u, kind, "")
@@ -1361,6 +1414,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._add_urls(d.urls(), d.kind())
 
     def _add_from_browser(self, url: str):
+        if not self._gate():
+            return
         kind = "live" if E.cam_detect(url) else "download"
         self._add_urls([url], kind)
         self.statusBar().showMessage("Added to downloads", 2500)
@@ -1368,6 +1423,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _add_media(self, info: dict):
         """Called when the page's Download button is clicked in the built-in browser."""
         import re
+        if not self._gate():
+            return
         media = (info.get("media") or "").strip()
         page = (info.get("page") or "").strip()
         url = media if media.lower().startswith(("http://", "https://")) else page
@@ -1397,6 +1454,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Added to downloads", 2500)
 
     def _add_urls(self, urls, kind="download"):
+        if not self._gate():
+            return
         for u in urls:
             self.mgr.add(u, kind, self.cfg.live_dir if kind == "live" else "")
         if urls:
@@ -1415,6 +1474,8 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self._open_dir()
         elif it.status == "Failed":
+            if not self._gate():
+                return
             # "Fix it": go through every route again, including the automatic page capture
             self._announced.discard(it.id)
             self._auto_tried.discard(it.id)
@@ -1505,6 +1566,8 @@ class MainWindow(QtWidgets.QMainWindow):
     # --- Watch: play the video of a page in Grabwave's own player (handles H.264) --------------
     def _watch(self, url: str, alt: str):
         import threading
+        if not self._gate():
+            return
         self.statusBar().showMessage("Opening the video…", 8000)
 
         def work():
@@ -1608,6 +1671,33 @@ class MainWindow(QtWidgets.QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
+    # --- license ---------------------------------------------------------------
+    def _lic_refresh(self):
+        self._lic = LIC.status()
+        self._lic_ui()
+
+    def _lic_ui(self):
+        s = self._lic
+        chip = self.lic_chip
+        if s.state == "trial":
+            chip.setText(f"Trial · {s.days_left} day{'s' if s.days_left != 1 else ''} left")
+        elif s.state == "expired":
+            chip.setText("Trial ended · Get a license")
+        chip.setVisible(s.state in ("trial", "expired"))
+
+    def _show_license(self, expired: bool):
+        dlg = UI.LicenseDialog(self, LIC, expired or self._lic.state == "expired")
+        dlg.activated.connect(self._lic_refresh)
+        dlg.exec()
+        self._lic_refresh()
+
+    def _gate(self) -> bool:
+        """True if new downloads / recordings are allowed; otherwise explains and offers a license."""
+        if self._lic.allowed:
+            return True
+        self._show_license(True)
+        return self._lic.allowed
+
     # --- updates ---------------------------------------------------------------
     def _check_updates(self, manual: bool):
         import threading
@@ -1665,6 +1755,7 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.about(
             self, "About Grabwave",
             f"<h3>Grabwave {VERSION}</h3><p>Download videos and record live streams.</p>"
+            + (f"<p><b>{self._lic.message}</b></p>" if LIC.enabled() else "") +
             f"<p style='color:#6b6458'>{engine}<br>ffmpeg: {E.find_ffmpeg() or 'not found'}</p>"
             "<p style='color:#6b6458'>Built with Qt, yt-dlp, streamlink and ffmpeg. "
             "See THIRD_PARTY.md for their licenses.</p>")

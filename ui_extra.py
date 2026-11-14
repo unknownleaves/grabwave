@@ -1095,10 +1095,12 @@ class Watcher(QtCore.QObject):
     wentLive = QtCore.Signal(str)
     changed = QtCore.Signal()
     _result = QtCore.Signal(str, bool)
+    allowed = staticmethod(lambda: True)  # the window replaces this: False once the trial has ended
 
     def __init__(self, mgr: E.Manager, cfg: E.Config):
         super().__init__()
         self.mgr, self.cfg = mgr, cfg
+        self.allowed = lambda: True  # the window sets this: False once the trial has ended
         self._next: dict = {}
         self._busy: set = set()
         self._first_seen = time.time() + 3
@@ -1135,7 +1137,7 @@ class Watcher(QtCore.QObject):
     def _on_result(self, url: str, live: bool) -> None:
         self._busy.discard(url)
         entry = next((e for e in self.cfg.watchlist if e.get("url") == url), None)
-        if live and entry and entry.get("enabled", True) and not self.active_item(url):
+        if live and entry and entry.get("enabled", True) and not self.active_item(url) and self.allowed():
             it = self.mgr.add(url, "live", self.cfg.live_dir)
             it.limit_min = int(entry.get("limit_min", 0))
             it.limit_mb = int(entry.get("limit_mb", 0))
@@ -1800,3 +1802,85 @@ class PlayerDialog(QtWidgets.QDialog):
             except Exception:
                 pass
         super().closeEvent(e)
+
+
+# ---- license window ----------------------------------------------------------------------------------
+class LicenseDialog(QtWidgets.QDialog):
+    """Shows the trial / license state, lets the person paste a key, and opens the buy page."""
+    activated = QtCore.Signal()
+
+    def __init__(self, parent, lic, expired: bool = False):
+        super().__init__(parent)
+        self.lic = lic
+        self.setWindowTitle("Grabwave license")
+        self.setMinimumWidth(480)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(24, 22, 24, 18)
+        lay.setSpacing(10)
+        top = QtWidgets.QHBoxLayout()
+        top.addWidget(Wavy("oops" if expired else "happy", 56))
+        col = QtWidgets.QVBoxLayout()
+        col.setSpacing(2)
+        self.title = QtWidgets.QLabel("")
+        self.title.setFont(serif(15))
+        col.addWidget(self.title)
+        self.sub = QtWidgets.QLabel("")
+        self.sub.setWordWrap(True)
+        self.sub.setStyleSheet(f"color: {MUTED};")
+        col.addWidget(self.sub)
+        top.addLayout(col, 1)
+        lay.addLayout(top)
+        self.keybox = QtWidgets.QPlainTextEdit()
+        self.keybox.setPlaceholderText("Paste your license key here (it starts with GW1.)")
+        self.keybox.setMaximumHeight(76)
+        lay.addWidget(self.keybox)
+        self.msg = QtWidgets.QLabel("")
+        self.msg.setWordWrap(True)
+        lay.addWidget(self.msg)
+        row = QtWidgets.QHBoxLayout()
+        self.remove = QtWidgets.QPushButton("Remove key from this computer")
+        self.remove.setObjectName("small")
+        self.remove.clicked.connect(self._remove)
+        row.addWidget(self.remove)
+        row.addStretch(1)
+        close = QtWidgets.QPushButton("Close")
+        close.clicked.connect(self.reject)
+        row.addWidget(close)
+        if lic.BUY_URL:
+            buy = QtWidgets.QPushButton("Buy Grabwave")
+            buy.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(lic.BUY_URL)))
+            row.addWidget(buy)
+        self.act = QtWidgets.QPushButton("Activate")
+        self.act.setObjectName("primary")
+        self.act.setDefault(True)
+        self.act.clicked.connect(self._activate)
+        row.addWidget(self.act)
+        lay.addLayout(row)
+        self._show_state()
+
+    def _show_state(self):
+        s = self.lic.status()
+        active = s.state == "active"
+        self.title.setText({"active": "Grabwave is licensed", "trial": "Free trial",
+                            "expired": "Your trial has ended"}.get(s.state, "Grabwave"))
+        self.sub.setText(s.message + ("" if active or s.state == "off" else
+                                      " Buy a license to keep downloading, recording and watching. "
+                                      "Your Shelf and saved videos stay available either way."))
+        self.keybox.setVisible(not active)
+        self.act.setVisible(not active)
+        self.remove.setVisible(active)
+
+    def _activate(self):
+        ok, text = self.lic.activate(self.keybox.toPlainText())
+        self.msg.setStyleSheet(f"color: {GREEN if ok else RED};")
+        self.msg.setText(text)
+        if ok:
+            self.keybox.clear()
+            self._show_state()
+            self.activated.emit()
+
+    def _remove(self):
+        self.lic.deactivate()
+        self.msg.setText("")
+        self._show_state()
+        self.activated.emit()

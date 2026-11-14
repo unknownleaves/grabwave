@@ -1,8 +1,12 @@
-Grabwave 2.12
-- New Watch button in the Browse tab: play the video of the page you're on inside Grabwave, including H.264 videos the browser tab can't show.
-- Built-in video player for downloaded files (double-click a video on the Shelf).
-- More ways to save a video: if one method fails, Grabwave now tries the next (page video list, captured stream, ffmpeg copy, gallery-dl).
-- Fixes pages that only gave a short preview clip instead of the full video.
-- Safer updates: if a new version can't start, Grabwave puts the previous one back.
-- Faster downloads in Maximum mode (16 pieces at once).
-- Publisher name and version details added to the program.
+Grabwave 2.15
+
+New
+- Free trial and license keys. Grabwave now runs free for 14 days. Help > Enter license key unlocks it for good. The header shows how many trial days are left.
+- When a trial ends, new downloads, recordings, Watch and Fix it pause. Your Shelf and the built-in player keep working.
+- Watch button streams a video through a local relay so it plays in the built-in player.
+- Sites that block live capture (error 418) are now captured automatically in the background.
+
+Improved
+- Watch now opens live rooms (Stripchat, XHamsterLive, Chaturbate) and tries more routes for YouTube and X before giving up.
+- Built-in player handles H.264 video.
+- Download engine and fallbacks are more resilient across sites.

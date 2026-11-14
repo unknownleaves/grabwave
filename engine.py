@@ -910,10 +910,10 @@ def run_live_streamlink(item: Item, cfg: Config) -> None:
                         pass
                 if stream is None and not item.alt_url:
                     item.error = ("The site refused Grabwave's direct lookup (HTTP 418 means it blocks automated "
-                                  "requests).\n\nWorkaround: open the room in the Browse tab, sign in if the site "
-                                  "asks, let the video start playing, then click the download button (top right "
-                                  "of the browser bar). Grabwave then records the exact stream your browser is "
-                                  "playing.")
+                                  "requests).\n\nGrabwave is now opening the room page itself, like a browser, to "
+                                  "pick up the stream address, and tries again every 90 seconds while the room is "
+                                  "offline. If it never starts: open the room in the Browse tab, sign in if the "
+                                  "site asks, then click the download button (top right of the browser bar).")
         else:
             try:
                 streams = sl.streams(item.url)
@@ -1326,35 +1326,81 @@ def fmt_dur(sec: float | None) -> str:
 #   StreamRelay hands them to ffmpeg and serves the result on a private local address,
 #   and the player window (Qt's own media player, which can decode H.264) plays that address.
 # ============================================================================================
+def _watch_headers(url: str, extra: dict | None = None) -> dict:
+    h = {"Referer": url, "User-Agent": browser_ua() or CAM_UA}
+    h.update(extra or {})
+    return h
+
+
+def _cam_watch_input(url: str, cfg: Config, alt_url: str, alt_referer: str):
+    """Live room (Stripchat, XHamsterLive, Chaturbate): returns (playlist address, headers) or raises."""
+    if alt_url and ".m3u8" in alt_url.lower():  # the address the built-in browser saw is the surest route
+        return alt_url, _watch_headers(alt_referer or url)
+    sl = _new_session(cfg)
+    stream = cam_open_stream(sl, url, cfg.live_quality, cfg.cookies_browser, effective_cookie_file(cfg))
+    addr = getattr(stream, "url", "") or ""
+    if not addr:
+        raise RuntimeError("no playlist address")
+    return addr, _watch_headers(url)
+
+
 def resolve_stream(url: str, cfg: Config, alt_url: str = "", alt_referer: str = "") -> dict:
-    """Returns {"inputs": [address, ...], "headers": {...}, "title": str} for the video on a page."""
+    """Returns {"inputs": [address, ...], "headers": {...}, "title": str} for the video on a page.
+    Routes, in order: live room resolver -> yt-dlp (with cookies) -> yt-dlp (other YouTube clients, no cookies)
+    -> KVS page reader -> address the built-in browser saw."""
     errors = []
     if url.lower().startswith(("http://", "https://")):
+        if cam_detect(url):
+            try:
+                addr, hdrs = _cam_watch_input(url, cfg, alt_url, alt_referer)
+                return {"inputs": [addr], "headers": hdrs, "title": _channel_name(url)}
+            except CamOffline as ex:
+                raise RuntimeError(f"This room isn't live right now ({ex}).")
+            except Exception as ex:  # noqa: BLE001
+                errors.append(_ANSI.sub("", str(ex))[:200])
         try:
             import yt_dlp
-            opts = _common_ydl_opts(cfg, True, "")
-            opts["format"] = "b[height<=1080]/bv*[height<=1080]+ba/b/bv*+ba"
-            opts["skip_download"] = True
-            opts.pop("postprocessors", None)
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(_normalize_url(url), download=False)
-                if info and info.get("entries"):
-                    info = next((x for x in info["entries"] if x), info)
-                fmts = info.get("requested_formats") or [info]
-                inputs = [f["url"] for f in fmts if f.get("url")]
-                if inputs:
-                    headers = dict(info.get("http_headers") or {})
-                    for f in fmts:
-                        headers.update(f.get("http_headers") or {})
-                    try:
-                        ck = ydl.cookiejar.get_cookie_header(inputs[0])
-                        if ck:
-                            headers["Cookie"] = ck
-                    except Exception:  # noqa: BLE001
-                        pass
-                    return {"inputs": inputs[:2], "headers": headers, "title": info.get("title") or ""}
         except Exception as ex:  # noqa: BLE001
-            errors.append(_ANSI.sub("", str(ex))[:200])
+            yt_dlp = None
+            errors.append(str(ex)[:200])
+        if yt_dlp is not None:
+            low = url.lower()
+            attempts = [("with your sign-in", None, True)]
+            if any(h in low for h in ("youtube.com", "youtu.be")):
+                attempts += [("other YouTube route 1", {"youtube": {"player_client": ["ios", "web_safari"]}}, False),
+                             ("other YouTube route 2", {"youtube": {"player_client": ["tv", "android_vr"]}}, False)]
+            else:
+                attempts += [("without sign-in", None, False)]
+            for label, extractor_args, use_cookies in attempts:
+                try:
+                    opts = _common_ydl_opts(cfg, True, "")
+                    opts["format"] = "b[height<=1080]/bv*[height<=1080]+ba/b/bv*+ba/best"
+                    opts["skip_download"] = True
+                    opts.pop("postprocessors", None)
+                    if not use_cookies:
+                        for k in ("cookiefile", "cookiesfrombrowser"):
+                            opts.pop(k, None)
+                    if extractor_args:
+                        opts["extractor_args"] = extractor_args
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(_normalize_url(url), download=False)
+                        if info and info.get("entries"):
+                            info = next((x for x in info["entries"] if x), info)
+                        fmts = info.get("requested_formats") or [info]
+                        inputs = [f["url"] for f in fmts if f.get("url")]
+                        if inputs:
+                            headers = dict(info.get("http_headers") or {})
+                            for f in fmts:
+                                headers.update(f.get("http_headers") or {})
+                            try:
+                                ck = ydl.cookiejar.get_cookie_header(inputs[0])
+                                if ck:
+                                    headers["Cookie"] = ck
+                            except Exception:  # noqa: BLE001
+                                pass
+                            return {"inputs": inputs[:2], "headers": headers, "title": info.get("title") or ""}
+                except Exception as ex:  # noqa: BLE001
+                    errors.append(_ANSI.sub("", str(ex))[:200])
         try:  # sites built on the KVS script (the page lists its own video addresses)
             cands = kvs_candidates(url)
             if cands:
@@ -1363,8 +1409,7 @@ def resolve_stream(url: str, cfg: Config, alt_url: str = "", alt_referer: str = 
         except Exception:  # noqa: BLE001
             pass
     if alt_url:  # a stream address the built-in browser saw
-        return {"inputs": [alt_url], "headers": {"Referer": alt_referer or url,
-                                                  "User-Agent": browser_ua() or "Mozilla/5.0"}, "title": ""}
+        return {"inputs": [alt_url], "headers": _watch_headers(alt_referer or url), "title": ""}
     raise RuntimeError(errors[0] if errors else "Couldn't find a video on this page.")
 
 
