@@ -1118,6 +1118,9 @@ def collection_kind(url: str) -> str:
         if re.search(r"(^|\.)pornhub\.(com|org|net)$", host) and first in ("model", "pornstar", "users", "channels",
                                                                           "playlist"):
             return "listing:pornhub"
+        if re.search(r"(^|\.)redtube\.(com|net)$", host) and first in ("users", "pornstar", "channels", "channel",
+                                                                     "playlist", "playlists"):
+            return "listing:redtube"
         if re.search(r"(^|\.)xhamster\d*\.[a-z]+$", host) and first in ("users", "creators", "channels", "pornstars"):
             return "listing:xhamster"
         if re.search(r"(^|\.)eporner\.com$", host) and first in ("profile", "pornstar", "channel"):
@@ -1310,7 +1313,10 @@ def _listing_pages(url: str, site: str):
     path = p.path.rstrip("/")
     low = path.lower()
     base = f"{p.scheme}://{p.netloc}"
-    if site == "pornhub":
+    if site == "redtube":
+        for n in range(1, 40):
+            yield f"{base}{path}" + (f"?page={n}" if n > 1 else "")
+    elif site == "pornhub":
         if not low.endswith("/videos") and "/playlist/" not in low and "/videos/" not in low:
             path += "/videos"
         for n in range(1, 40):
@@ -1330,6 +1336,7 @@ def _listing_pages(url: str, site: str):
 _LISTING_LINK = {
     "pornhub": r'href=["\'](/view_video\.php\?viewkey=[A-Za-z0-9]+)',
     "xhamster": r'href=["\'](https?://[^"\']*xhamster\d*\.[a-z]+/videos/[^"\'#?]+|/videos/[^"\'#?]+)',
+    "redtube": r'href=["\'](?:https?://(?:www\.)?redtube\.(?:com|net))?(/\d{4,9})(?=["\'?#/])',
     "eporner": r'href=["\'](/(?:video-[A-Za-z0-9]+|hd-porn/[A-Za-z0-9]+)/[^"\'#?]*)',
 }
 

@@ -1,7 +1,7 @@
-Grabwave 2.17
+Grabwave 2.18
 
 New
-- Profiles, channels and playlists: paste a Pornhub, xhamster or eporner profile, channel or playlist page (and similar pages on many other sites) and Grabwave downloads every video on it.
+- Profiles, channels and playlists: paste a Pornhub, xhamster, eporner or RedTube profile, channel or playlist page (and similar pages on many other sites) and Grabwave downloads every video on it.
 - Albums and profiles: paste an erome album or profile, or a redgifs profile, and Grabwave finds every video and downloads them all, each as its own item in a folder named after the album or profile.
 - Free trial and license keys. Grabwave now runs free for 14 days. Help > Enter license key unlocks it for good. The header shows how many trial days are left.
 - When a trial ends, new downloads, recordings, Watch and Fix it pause. Your Shelf and the built-in player keep working.
