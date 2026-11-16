@@ -486,6 +486,8 @@ def status_line(it: E.Item) -> tuple[str, str]:
         return "Paused" + (f"  ·  {pct}%" if pct is not None else ""), MUTED
     if s == "Queued":
         return "Queued", MUTED
+    if s == "Checking":
+        return "Looking for videos…", MUTED
     return s, MUTED
 
 
@@ -1087,7 +1089,7 @@ class TrimDialog(QtWidgets.QDialog):
 # ---- watchlist ---------------------------------------------------------------------------------
 LIMITS = [("No limit", 0, 0), ("Stop after 1 hour", 60, 0), ("Stop after 2 hours", 120, 0),
           ("Stop after 4 hours", 240, 0), ("Stop at 2 GB", 0, 2048), ("Stop at 5 GB", 0, 5120)]
-ACTIVE = ("Queued", "Downloading", "Recording", "Waiting", "Processing")
+ACTIVE = ("Queued", "Checking", "Downloading", "Recording", "Waiting", "Processing")
 
 
 class Watcher(QtCore.QObject):

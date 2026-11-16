@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 MAX_CONCURRENT = 20  # hard cap (MeGet-style apps typically stop at 15)
 
@@ -397,6 +397,7 @@ class Item:
         self.reason = ""
         self._tmp = ""
         self._final = ""
+        self._pending = None  # result of looking for the videos on a collection page
 
     def to_json(self) -> dict:
         keys = ("id", "url", "kind", "outdir", "referer", "filename", "title", "status", "done", "total",
@@ -412,6 +413,8 @@ class Item:
                 setattr(it, k, v)
         if it.status == "Retrying":
             it.status = "Failed"
+        if it.status == "Checking":  # closed while looking for videos: just download the link normally
+            it.status = "Queued"
         if it.status in RUNNING_STATES:  # app was closed while running
             it.status = "Stopped" if it.kind == "download" else "Completed"
             if it.kind == "download":
@@ -1086,10 +1089,237 @@ def _worker(item: Item, cfg: Config) -> None:
 # Manager
 # ----------------------------------------------------------------------------
 
+# ----------------------------------------------------------------------------
+# Pages with many videos (erome albums / profiles, redgifs profiles): find every video, one item each
+# ----------------------------------------------------------------------------
+_EROME_RESERVED = {"a", "explore", "search", "user", "upload", "feed", "popular", "new", "hot", "login", "register",
+                   "contact", "terms", "privacy", "dmca", "report", "tags", "tag", "faq", "about", "trending",
+                   "models", "profile", "settings", "messages", "notifications", "favorites", "following"}
+MAX_COLLECTION = 300
+
+
+def collection_kind(url: str) -> str:
+    """'erome-album' | 'erome-profile' | 'redgifs-user' | '' (anything else downloads as a single page)."""
+    try:
+        p = urlparse(url)
+    except Exception:  # noqa: BLE001
+        return ""
+    host = (p.hostname or "").lower()
+    parts = [x for x in p.path.split("/") if x]
+    if host in ("erome.com", "www.erome.com") and parts:
+        if parts[0] == "a" and len(parts) >= 2:
+            return "erome-album"
+        if len(parts) == 1 and parts[0].lower() not in _EROME_RESERVED:
+            return "erome-profile"
+    if host in ("redgifs.com", "www.redgifs.com") and len(parts) >= 2 and parts[0] == "users":
+        return "redgifs-user"
+    return ""
+
+
+def _page_html(url: str, referer: str = "", headers: dict | None = None) -> str:
+    hdr = {"User-Agent": browser_ua() or "Mozilla/5.0", "Referer": referer or url, "Accept-Language": "en-US,en;q=0.9"}
+    hdr.update(headers or {})
+    try:
+        from curl_cffi import requests as cr
+        r = cr.get(url, headers=hdr, impersonate="chrome", timeout=25)
+        if r.status_code < 400:
+            return r.text
+    except Exception:  # noqa: BLE001
+        pass
+    import ssl
+    import urllib.request
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        ctx = ssl.create_default_context()
+    with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=25, context=ctx) as r:
+        return r.read(4_000_000).decode("utf-8", "replace")
+
+
+def _html_unescape(t: str) -> str:
+    import html
+    return html.unescape(t or "").strip()
+
+
+def _erome_album(url: str) -> tuple[str, list]:
+    """(album title, [entry, ...]) for one erome album page, own page reader."""
+    h = _page_html(url, "https://www.erome.com/")
+    title = ""
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", h, re.S | re.I) or re.search(
+        r'property=["\']og:title["\'][^>]*content=["\']([^"\']+)', h, re.I)
+    if m:
+        title = _html_unescape(re.sub(r"<[^>]+>", "", m.group(1)))
+        title = re.sub(r"\s*\|\s*EroMe.*$", "", title, flags=re.I)
+    out, seen = [], set()
+    for vm in re.finditer(r"<video\b([^>]*)>(.*?)</video>", h, re.S | re.I):
+        attrs, inner = vm.group(1), vm.group(2)
+        poster = re.search(r'poster=["\']([^"\']+)', attrs)
+        best, best_res = "", -1
+        for sm in re.finditer(r"<source\b([^>]*)>", inner, re.I):
+            sa = sm.group(1)
+            src = re.search(r'src=["\']([^"\']+)', sa)
+            if not src:
+                continue
+            res = re.search(r'(?:res|label|data-res)=["\'](\d{3,4})', sa)
+            r = int(res.group(1)) if res else 0
+            if r > best_res:
+                best, best_res = src.group(1), r
+        if not best:
+            src = re.search(r'src=["\']([^"\']+\.(?:mp4|webm|m4v|mov)[^"\']*)', attrs)
+            best = src.group(1) if src else ""
+        if best:
+            best = urljoin(url, _html_unescape(best))
+            if best not in seen:
+                seen.add(best)
+                out.append({"url": best, "referer": url,
+                            "thumb": urljoin(url, _html_unescape(poster.group(1))) if poster else ""})
+    if not out:  # no <video> tags matched: take any direct video address in the page
+        for mm in re.finditer(r'https?://[^"\'\s<>\\]+?\.(?:mp4|webm|m4v|mov)(?:\?[^"\'\s<>\\]*)?', h):
+            u2 = _html_unescape(mm.group(0))
+            if u2 not in seen:
+                seen.add(u2)
+                out.append({"url": u2, "referer": url, "thumb": ""})
+    return title, out
+
+
+def _erome_profile_albums(url: str) -> tuple[str, list]:
+    p = urlparse(url)
+    name = [x for x in p.path.split("/") if x][0]
+    albums, seen = [], set()
+    for page in range(1, 31):
+        sep = "&" if "?" in url else "?"
+        h = _page_html(url if page == 1 else f"{url}{sep}page={page}", "https://www.erome.com/")
+        found = [m.group(1) for m in re.finditer(r'href=["\'](?:https?://(?:www\.)?erome\.com)?/a/([A-Za-z0-9_-]+)', h)]
+        new = [a for a in dict.fromkeys(found) if a not in seen]
+        if not new:
+            break
+        seen.update(new)
+        albums += new
+        if len(albums) >= 120:
+            break
+    return name, [f"https://www.erome.com/a/{a}" for a in albums]
+
+
+def _erome_entries(url: str, cfg: Config) -> tuple[str, list]:
+    kind = collection_kind(url)
+    if kind == "erome-album":
+        title, ents = _erome_album(url)
+        return title, ents
+    name, albums = _erome_profile_albums(url)
+    ents = []
+    for a in albums:
+        try:
+            t, es = _erome_album(a)
+        except Exception:  # noqa: BLE001
+            continue
+        for i, e in enumerate(es, 1):
+            e["filename"] = _safe_name(f"{t or a.rsplit('/', 1)[-1]} {i:02d}" if len(es) > 1 else (t or a.rsplit('/', 1)[-1]))
+        ents += es
+        if len(ents) >= MAX_COLLECTION:
+            break
+    return name, ents
+
+
+def _redgifs_api(url: str, cfg: Config) -> tuple[str, list]:
+    import json as _json
+    name = [x for x in urlparse(url).path.split("/") if x][1]
+    ua = browser_ua() or "Mozilla/5.0"
+    tok = _json.loads(_page_html("https://api.redgifs.com/v2/auth/temporary", "https://www.redgifs.com/",
+                                 {"User-Agent": ua}))["token"]
+    hdr = {"Authorization": f"Bearer {tok}", "User-Agent": ua, "Origin": "https://www.redgifs.com"}
+    ents, page, pages = [], 1, 1
+    while page <= pages and len(ents) < MAX_COLLECTION:
+        d = _json.loads(_page_html(
+            f"https://api.redgifs.com/v2/users/{name}/search?order=recent&type=g&page={page}",
+            "https://www.redgifs.com/", hdr))
+        pages = int(d.get("pages") or 1)
+        for g in d.get("gifs") or []:
+            gid = g.get("id")
+            if not gid:
+                continue
+            u = g.get("urls") or {}
+            ents.append({"url": f"https://www.redgifs.com/watch/{gid}", "referer": "https://www.redgifs.com/",
+                         "filename": _safe_name(f"{name} {gid}"), "thumb": u.get("poster") or u.get("thumbnail") or "",
+                         "alt_url": u.get("hd") or u.get("sd") or "", "alt_referer": "https://www.redgifs.com/"})
+        page += 1
+    return name, ents
+
+
+def _ytdlp_flat(url: str, cfg: Config) -> tuple[str, list]:
+    import yt_dlp
+    opts = _common_ydl_opts(cfg, True, "")
+    opts.update({"extract_flat": "in_playlist", "skip_download": True, "noplaylist": False, "playlistend": MAX_COLLECTION})
+    opts.pop("postprocessors", None)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(_normalize_url(url), download=False)
+    ents = []
+    for e in (info or {}).get("entries") or []:
+        if not e:
+            continue
+        u = e.get("url") or e.get("webpage_url") or ""
+        if u.lower().startswith(("http://", "https://")):
+            ents.append({"url": u, "referer": url, "thumb": e.get("thumbnail") or "",
+                         "filename": _safe_name(e.get("title") or "") if e.get("title") else ""})
+    return (info or {}).get("title") or "", ents
+
+
+def _gdl_entries(url: str, cfg: Config) -> tuple[str, list]:
+    from gallery_dl import config as gconf, extractor as gext
+    gconf.clear()
+    cf = effective_cookie_file(cfg)
+    if cf:
+        gconf.set(("extractor",), "cookies", cf)
+    ex = gext.find(url)
+    if ex is None:
+        return "", []
+    ents = []
+    for msg in ex:
+        if msg and msg[0] == 3 and len(msg) >= 3:  # (Message.Url, url, kwdict)
+            u, kw = msg[1], msg[2] or {}
+            ext = str(kw.get("extension") or u.rsplit(".", 1)[-1]).lower().split("?")[0]
+            if ext in ("mp4", "webm", "m4v", "mov", "mkv"):
+                ents.append({"url": u, "referer": url, "thumb": "",
+                             "filename": _safe_name(str(kw.get("filename") or ""))})
+                if len(ents) >= MAX_COLLECTION:
+                    break
+    return "", ents
+
+
+def _safe_name(t: str) -> str:
+    return re.sub(r'[\\/:*?"<>|%\r\n\t]', "", t or "").strip()[:140].strip(" .")
+
+
+def expand_collection(url: str, cfg: Config) -> tuple[str, list]:
+    """Every video on an erome album/profile or a redgifs profile -> (group title, [entry dict, ...]).
+    Tries Grabwave's own page reader first, then yt-dlp, then gallery-dl. Empty list = not a collection."""
+    kind = collection_kind(url)
+    if not kind:
+        return "", []
+    routes = {"erome-album": [_erome_entries, _ytdlp_flat, _gdl_entries],
+              "erome-profile": [_erome_entries, _ytdlp_flat, _gdl_entries],
+              "redgifs-user": [_redgifs_api, _ytdlp_flat, _gdl_entries]}[kind]
+    for fn in routes:
+        try:
+            title, ents = fn(url, cfg)
+        except Exception:  # noqa: BLE001
+            continue
+        seen, uniq = set(), []
+        for e in ents:
+            if e["url"] not in seen:
+                seen.add(e["url"])
+                uniq.append(e)
+        if uniq:
+            return title, uniq[:MAX_COLLECTION]
+    return "", []
+
+
+
 class Manager:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.items: list[Item] = []
+        self.notice = ""  # one-line message for the status bar (e.g. "Found 12 videos")
         self._threads: dict[str, threading.Thread] = {}
         self.load()
         for old in config_dir().glob("cj_*.txt"):  # leftover private cookie copies
@@ -1103,12 +1333,57 @@ class Manager:
     def add(self, url: str, kind: str = "download", outdir: str = "") -> Item:
         it = Item(url.strip(), kind, outdir)
         self.items.append(it)
+        if kind == "download" and collection_kind(it.url):  # album / profile: find every video first
+            it.status = "Checking"
+            it.title = "Looking for videos…"
+            threading.Thread(target=self._expand_worker, args=(it,), daemon=True).start()
         return it
+
+    def _expand_worker(self, it: Item) -> None:
+        try:
+            it._pending = expand_collection(it.url, self.cfg)
+        except Exception:  # noqa: BLE001
+            it._pending = ("", [])
+
+    def _apply_expansion(self, it: Item) -> None:
+        title, ents = it._pending
+        it._pending = None
+        if it not in self.items:  # removed while looking
+            return
+        if not ents:
+            it.status, it.title = "Queued", it.url  # fall back to the normal single-page route
+            self.notice = "No separate videos found; trying the page as one video."
+            return
+        group = _safe_name(title)
+        outdir = it.outdir
+        if not outdir and len(ents) > 1 and group:
+            outdir = str(Path(self.cfg.download_dir) / group)
+        base = list(self.items).index(it)
+        extra = []
+        for n, e in enumerate(ents):
+            tgt = it if n == 0 else Item(e["url"], "download", outdir)
+            tgt.url, tgt.outdir = e["url"], outdir
+            tgt.referer = e.get("referer", "") if e["url"] != e.get("referer") else ""
+            tgt.filename = e.get("filename", "")
+            tgt.title = tgt.filename or e["url"]
+            tgt.thumb = e.get("thumb", "")
+            tgt.alt_url, tgt.alt_referer = e.get("alt_url", ""), e.get("alt_referer", "")
+            if not tgt.alt_url and re.search(r"\.(mp4|webm|m4v|mov)(\?|$)", e["url"], re.I):
+                tgt.alt_url, tgt.alt_referer = e["url"], e.get("referer", "")  # second route: ffmpeg copy
+            tgt.quality = it.quality
+            tgt.status = "Queued"
+            if n:
+                extra.append(tgt)
+        self.items[base + 1:base + 1] = extra
+        self.notice = f"Found {len(ents)} video{'s' if len(ents) != 1 else ''}" + (f" in {group}" if group else "") + "."
+        self.save()
 
     def active_count(self) -> int:
         return sum(1 for i in self.items if i.running)
 
     def tick(self) -> None:
+        for it in [i for i in self.items if i._pending is not None]:
+            self._apply_expansion(it)
         slots = effective_slots(self.cfg) - self.active_count()
         for it in self.items:
             if slots <= 0:

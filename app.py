@@ -25,7 +25,7 @@ import ui_extra as UI
 import licensing as LIC
 import updater as U
 
-VERSION = "2.15"
+VERSION = "2.16"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -1226,7 +1226,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proxy.invalidateFilter()
 
     def _tick(self):
+        n_before = len(self.mgr.items)
         self.mgr.tick()
+        if len(self.mgr.items) != n_before:  # a collection page turned into several downloads
+            self.model.reset()
+        if self.mgr.notice:
+            self.statusBar().showMessage(self.mgr.notice, 6000)
+            self.mgr.notice = ""
         self.model.refresh()
         self.proxy.invalidateFilter()
         self._tick_n += 1
