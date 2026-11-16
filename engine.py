@@ -1095,11 +1095,11 @@ def _worker(item: Item, cfg: Config) -> None:
 _EROME_RESERVED = {"a", "explore", "search", "user", "upload", "feed", "popular", "new", "hot", "login", "register",
                    "contact", "terms", "privacy", "dmca", "report", "tags", "tag", "faq", "about", "trending",
                    "models", "profile", "settings", "messages", "notifications", "favorites", "following"}
-MAX_COLLECTION = 300
+MAX_COLLECTION = 500
 
 
 def collection_kind(url: str) -> str:
-    """'erome-album' | 'erome-profile' | 'redgifs-user' | '' (anything else downloads as a single page)."""
+    """'erome-album' | 'erome-profile' | 'redgifs-user' | 'listing:<site>' | '' (anything else is one video)."""
     try:
         p = urlparse(url)
     except Exception:  # noqa: BLE001
@@ -1113,6 +1113,24 @@ def collection_kind(url: str) -> str:
             return "erome-profile"
     if host in ("redgifs.com", "www.redgifs.com") and len(parts) >= 2 and parts[0] == "users":
         return "redgifs-user"
+    if len(parts) >= 2:
+        first = parts[0].lower()
+        if re.search(r"(^|\.)pornhub\.(com|org|net)$", host) and first in ("model", "pornstar", "users", "channels",
+                                                                          "playlist"):
+            return "listing:pornhub"
+        if re.search(r"(^|\.)xhamster\d*\.[a-z]+$", host) and first in ("users", "creators", "channels", "pornstars"):
+            return "listing:xhamster"
+        if re.search(r"(^|\.)eporner\.com$", host) and first in ("profile", "pornstar", "channel"):
+            return "listing:eporner"
+        # any other site: profile / channel / playlist style addresses (yt-dlp's list reader decides if it is one)
+        skip = ("youtube.com", "youtu.be", "youtube-nocookie.com", "x.com", "twitter.com", "instagram.com",
+                "tiktok.com", "facebook.com", "fb.watch", "google.com")
+        if (first in ("users", "user", "u", "model", "models", "pornstar", "pornstars", "channel", "channels", "c",
+                      "creator", "creators", "profile", "playlist", "playlists", "members", "member", "actor",
+                      "actress", "studio", "studios", "uploader")
+                and (len(parts) == 2 or (len(parts) == 3 and parts[2].lower() in ("videos", "uploads", "favorites", "playlists")))
+                and not any(host == h or host.endswith("." + h) for h in skip)):
+            return "listing:any"
     return ""
 
 
@@ -1286,6 +1304,62 @@ def _gdl_entries(url: str, cfg: Config) -> tuple[str, list]:
     return "", ents
 
 
+def _listing_pages(url: str, site: str):
+    """Yield the address of page 1, 2, 3 ... of a profile / channel video list."""
+    p = urlparse(url)
+    path = p.path.rstrip("/")
+    low = path.lower()
+    base = f"{p.scheme}://{p.netloc}"
+    if site == "pornhub":
+        if not low.endswith("/videos") and "/playlist/" not in low and "/videos/" not in low:
+            path += "/videos"
+        for n in range(1, 40):
+            yield f"{base}{path}" + (f"?page={n}" if n > 1 else "")
+    elif site == "xhamster":
+        path = re.sub(r"/\d+$", "", path)
+        if ("/users/" in low or "/creators/" in low) and not re.search(r"/(videos|best|newest)$", low):
+            path += "/videos"
+        for n in range(1, 40):
+            yield f"{base}{path}" + (f"/{n}" if n > 1 else "")
+    else:  # eporner
+        path = re.sub(r"/\d+$", "", path)
+        for n in range(1, 40):
+            yield f"{base}{path}/" + (f"{n}/" if n > 1 else "")
+
+
+_LISTING_LINK = {
+    "pornhub": r'href=["\'](/view_video\.php\?viewkey=[A-Za-z0-9]+)',
+    "xhamster": r'href=["\'](https?://[^"\']*xhamster\d*\.[a-z]+/videos/[^"\'#?]+|/videos/[^"\'#?]+)',
+    "eporner": r'href=["\'](/(?:video-[A-Za-z0-9]+|hd-porn/[A-Za-z0-9]+)/[^"\'#?]*)',
+}
+
+
+def _listing_scrape(url: str, cfg: Config) -> tuple[str, list]:
+    """Own page reader for profile / channel pages: collects the video links page by page."""
+    site = collection_kind(url).split(":", 1)[1]
+    if site not in _LISTING_LINK:
+        raise RuntimeError("no page reader for this site")
+    pat = re.compile(_LISTING_LINK[site], re.I)
+    ents, seen = [], set()
+    for page_url in _listing_pages(url, site):
+        try:
+            h = _page_html(page_url, url)
+        except Exception:  # noqa: BLE001
+            break
+        new = 0
+        for m in pat.finditer(h):
+            link = urljoin(page_url, _html_unescape(m.group(1)))
+            key = re.sub(r"[?#].*$", "", link) if site != "pornhub" else link
+            if key in seen:
+                continue
+            seen.add(key)
+            new += 1
+            ents.append({"url": link, "referer": url, "thumb": "", "filename": ""})
+        if not new or len(ents) >= MAX_COLLECTION:
+            break
+    return "", ents
+
+
 def _safe_name(t: str) -> str:
     return re.sub(r'[\\/:*?"<>|%\r\n\t]', "", t or "").strip()[:140].strip(" .")
 
@@ -1298,7 +1372,8 @@ def expand_collection(url: str, cfg: Config) -> tuple[str, list]:
         return "", []
     routes = {"erome-album": [_erome_entries, _ytdlp_flat, _gdl_entries],
               "erome-profile": [_erome_entries, _ytdlp_flat, _gdl_entries],
-              "redgifs-user": [_redgifs_api, _ytdlp_flat, _gdl_entries]}[kind]
+              "redgifs-user": [_redgifs_api, _ytdlp_flat, _gdl_entries]}.get(
+        kind, [_ytdlp_flat, _listing_scrape, _gdl_entries])
     for fn in routes:
         try:
             title, ents = fn(url, cfg)
@@ -1310,6 +1385,11 @@ def expand_collection(url: str, cfg: Config) -> tuple[str, list]:
                 seen.add(e["url"])
                 uniq.append(e)
         if uniq:
+            if not title:
+                segs = [x for x in urlparse(url).path.split("/") if x and not x.isdigit()
+                        and x.lower() not in ("videos", "profile", "users", "model", "pornstar", "channel", "channels",
+                                              "creators", "pornstars", "playlist")]
+                title = segs[0].replace("-", " ").replace("_", " ") if segs else ""
             return title, uniq[:MAX_COLLECTION]
     return "", []
 
