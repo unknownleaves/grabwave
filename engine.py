@@ -1115,6 +1115,11 @@ def collection_kind(url: str) -> str:
             return "erome-profile"
     if host in ("redgifs.com", "www.redgifs.com") and len(parts) >= 2 and parts[0] == "users":
         return "redgifs-user"
+    if re.search(r"(^|\.)(?:xfree|bodgirls)\.com$", host) and any(
+            x.lower() in ("models", "model", "pornstars", "pornstar", "channels", "channel", "creators", "users",
+                          "profile", "profiles", "performers", "girls", "tags", "categories", "category")
+            for x in parts[:-1] if True) and len(parts) >= 2:
+        return "listing:generic"
     if len(parts) == 1 and re.search(r"(^|\.)(?:xfree|bodgirls)\.com$", host) and parts[0].lower() not in _VIDEO_WORDS \
             and parts[0].lower() not in ("search", "tags", "categories", "login", "signup", "about", "terms", "privacy"):
         return "listing:generic"
@@ -1415,17 +1420,22 @@ def _generic_links(html: str, page_url: str) -> list:
 
 
 def _generic_listing(url: str, cfg: Config) -> tuple[str, list]:
+    """Page 1, 2, 3 ... of a profile / model page. The page-number style is not known, so the first few
+    styles are tried on page 2 (?page=2, /page/2/, /2/, ?p=2) and the first that brings new links is kept."""
+    base = url.split("#")[0]
+    clean = re.sub(r"[?&](?:page|p)=\d+", "", base)
+    path_only = clean.split("?")[0].rstrip("/")
+    query = ("?" + clean.split("?", 1)[1]) if "?" in clean else ""
+    sep = "&" if "?" in clean else "?"
+    styles = [lambda n: f"{clean}{sep}page={n}", lambda n: f"{path_only}/page/{n}/{query}",
+              lambda n: f"{path_only}/{n}/{query}", lambda n: f"{clean}{sep}p={n}"]
     ents, seen = [], set()
-    for n in range(1, 40):
-        if n == 1:
-            page_url = url
-        else:
-            sep = "&" if "?" in url else "?"
-            page_url = f"{re.sub(r'[?&]page=\d+', '', url)}{sep}page={n}"
+
+    def grab(page_url):
         try:
             html = _page_html(page_url, url)
         except Exception:  # noqa: BLE001
-            break
+            return 0
         new = 0
         for link, th, ti in _generic_links(html, page_url):
             if link in seen:
@@ -1433,8 +1443,19 @@ def _generic_listing(url: str, cfg: Config) -> tuple[str, list]:
             seen.add(link)
             new += 1
             ents.append({"url": link, "referer": url, "thumb": th, "filename": ""})
-        if not new or len(ents) >= MAX_COLLECTION:
+        return new
+
+    if not grab(base):
+        return "", ents
+    style = None
+    for st in styles:  # find the page-number style that works
+        if grab(st(2)):
+            style = st
             break
+    if style is not None:
+        for n in range(3, 40):
+            if len(ents) >= MAX_COLLECTION or not grab(style(n)):
+                break
     return "", ents
 
 
@@ -1467,7 +1488,7 @@ def expand_collection(url: str, cfg: Config) -> tuple[str, list]:
                 segs = [x for x in urlparse(url).path.split("/") if x and not x.isdigit()
                         and x.lower() not in ("videos", "profile", "users", "model", "pornstar", "channel", "channels",
                                               "creators", "pornstars", "playlist")]
-                title = segs[0].replace("-", " ").replace("_", " ") if segs else ""
+                title = segs[-1].replace("-", " ").replace("_", " ") if segs else ""
             return title, uniq[:MAX_COLLECTION]
     return "", []
 

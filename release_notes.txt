@@ -1,6 +1,7 @@
-Grabwave 2.20
+Grabwave 2.21
 
 New
+- bodgirls.com: model pages such as /videos/models/NAME now work; page numbering is detected automatically.
 - bodgirls.com: model and profile pages download every video on them.
 - xFree profiles: paste a profile page and Grabwave downloads every video on it. A new layout-independent page reader also covers profile pages on other sites.
 - Profiles, channels and playlists: paste a Pornhub, xhamster, eporner or RedTube profile, channel or playlist page (and similar pages on many other sites) and Grabwave downloads every video on it.
