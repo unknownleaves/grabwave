@@ -1095,6 +1095,8 @@ def _worker(item: Item, cfg: Config) -> None:
 _EROME_RESERVED = {"a", "explore", "search", "user", "upload", "feed", "popular", "new", "hot", "login", "register",
                    "contact", "terms", "privacy", "dmca", "report", "tags", "tag", "faq", "about", "trending",
                    "models", "profile", "settings", "messages", "notifications", "favorites", "following"}
+_VIDEO_WORDS = {"video", "videos", "watch", "v", "view", "embed", "clip", "clips", "movie", "movies", "play",
+                "player", "gif", "gifs"}
 MAX_COLLECTION = 500
 
 
@@ -1113,11 +1115,16 @@ def collection_kind(url: str) -> str:
             return "erome-profile"
     if host in ("redgifs.com", "www.redgifs.com") and len(parts) >= 2 and parts[0] == "users":
         return "redgifs-user"
+    if len(parts) == 1 and re.search(r"(^|\.)xfree\.com$", host) and parts[0].lower() not in _VIDEO_WORDS \
+            and parts[0].lower() not in ("search", "tags", "categories", "login", "signup", "about", "terms", "privacy"):
+        return "listing:xfree"
     if len(parts) >= 2:
         first = parts[0].lower()
         if re.search(r"(^|\.)pornhub\.(com|org|net)$", host) and first in ("model", "pornstar", "users", "channels",
                                                                           "playlist"):
             return "listing:pornhub"
+        if re.search(r"(^|\.)xfree\.com$", host) and first not in _VIDEO_WORDS:
+            return "listing:xfree"
         if re.search(r"(^|\.)redtube\.(com|net)$", host) and first in ("users", "pornstar", "channels", "channel",
                                                                      "playlist", "playlists"):
             return "listing:redtube"
@@ -1345,7 +1352,7 @@ def _listing_scrape(url: str, cfg: Config) -> tuple[str, list]:
     """Own page reader for profile / channel pages: collects the video links page by page."""
     site = collection_kind(url).split(":", 1)[1]
     if site not in _LISTING_LINK:
-        raise RuntimeError("no page reader for this site")
+        return _generic_listing(url, cfg)
     pat = re.compile(_LISTING_LINK[site], re.I)
     ents, seen = [], set()
     for page_url in _listing_pages(url, site):
@@ -1362,6 +1369,70 @@ def _listing_scrape(url: str, cfg: Config) -> tuple[str, list]:
             seen.add(key)
             new += 1
             ents.append({"url": link, "referer": url, "thumb": "", "filename": ""})
+        if not new or len(ents) >= MAX_COLLECTION:
+            break
+    return "", ents
+
+
+def _generic_links(html: str, page_url: str) -> list:
+    """Layout-independent: the video links of a profile page are the repeated thumbnail links that share one
+    address pattern. Returns [(link, thumb, title), ...] for the biggest such group, or [] (also for a page that is
+    itself one video)."""
+    from collections import Counter
+    if re.search(r'property=["\']og:type["\'][^>]*content=["\']video', html, re.I) or \
+            re.search(r'content=["\']video[^"\']*["\'][^>]*property=["\']og:type', html, re.I) or \
+            '"@type":"VideoObject"' in html.replace(" ", "") or "application/ld+json" in html and "VideoObject" in html:
+        return []
+    host = urlparse(page_url).netloc.lower()
+    here = urlparse(page_url).path.rstrip("/")
+    cands = []
+    for m in re.finditer(r"<a\b([^>]*?)href=[\"']([^\"'#]+)[\"']([^>]*)>(.*?)</a>", html, re.S | re.I):
+        inner = m.group(4)
+        if "<img" not in inner.lower() and "data-src" not in inner.lower() and "poster" not in inner.lower():
+            continue
+        link = urljoin(page_url, _html_unescape(m.group(2)))
+        pu = urlparse(link)
+        if pu.netloc.lower().removeprefix("www.") != host.removeprefix("www.") or pu.path.rstrip("/") in ("", here):
+            continue
+        segs = [x for x in pu.path.split("/") if x]
+        tmpl = (segs[0].lower() if segs else "", len(segs))
+        img = re.search(r'(?:data-src|data-original|src)=["\']([^"\']+)', inner, re.I)
+        ttl = re.search(r'(?:title|alt)=["\']([^"\']{3,})', m.group(1) + m.group(3) + inner, re.I)
+        cands.append((tmpl, link, urljoin(page_url, _html_unescape(img.group(1))) if img else "",
+                      _html_unescape(ttl.group(1)) if ttl else ""))
+    if not cands:
+        return []
+    common, n = Counter(t for t, *_ in cands).most_common(1)[0]
+    if n < 3 or common[0] in ("tag", "tags", "category", "categories", "user", "users", "profile", "channel",
+                              "channels", "model", "models", "pornstar", "pornstars", "creator", "creators"):
+        return []
+    seen, out = set(), []
+    for t, link, th, ti in cands:
+        if t == common and link not in seen:
+            seen.add(link)
+            out.append((link, th, ti))
+    return out
+
+
+def _generic_listing(url: str, cfg: Config) -> tuple[str, list]:
+    ents, seen = [], set()
+    for n in range(1, 40):
+        if n == 1:
+            page_url = url
+        else:
+            sep = "&" if "?" in url else "?"
+            page_url = f"{re.sub(r'[?&]page=\d+', '', url)}{sep}page={n}"
+        try:
+            html = _page_html(page_url, url)
+        except Exception:  # noqa: BLE001
+            break
+        new = 0
+        for link, th, ti in _generic_links(html, page_url):
+            if link in seen:
+                continue
+            seen.add(link)
+            new += 1
+            ents.append({"url": link, "referer": url, "thumb": th, "filename": ""})
         if not new or len(ents) >= MAX_COLLECTION:
             break
     return "", ents
