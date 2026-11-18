@@ -1115,16 +1115,16 @@ def collection_kind(url: str) -> str:
             return "erome-profile"
     if host in ("redgifs.com", "www.redgifs.com") and len(parts) >= 2 and parts[0] == "users":
         return "redgifs-user"
-    if len(parts) == 1 and re.search(r"(^|\.)xfree\.com$", host) and parts[0].lower() not in _VIDEO_WORDS \
+    if len(parts) == 1 and re.search(r"(^|\.)(?:xfree|bodgirls)\.com$", host) and parts[0].lower() not in _VIDEO_WORDS \
             and parts[0].lower() not in ("search", "tags", "categories", "login", "signup", "about", "terms", "privacy"):
-        return "listing:xfree"
+        return "listing:generic"
     if len(parts) >= 2:
         first = parts[0].lower()
         if re.search(r"(^|\.)pornhub\.(com|org|net)$", host) and first in ("model", "pornstar", "users", "channels",
                                                                           "playlist"):
             return "listing:pornhub"
-        if re.search(r"(^|\.)xfree\.com$", host) and first not in _VIDEO_WORDS:
-            return "listing:xfree"
+        if re.search(r"(^|\.)(?:xfree|bodgirls)\.com$", host) and first not in _VIDEO_WORDS:
+            return "listing:generic"
         if re.search(r"(^|\.)redtube\.(com|net)$", host) and first in ("users", "pornstar", "channels", "channel",
                                                                      "playlist", "playlists"):
             return "listing:redtube"
