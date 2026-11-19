@@ -397,6 +397,7 @@ class Item:
         self.reason = ""
         self._tmp = ""
         self._final = ""
+        self._dom_html = ""
         self._pending = None  # result of looking for the videos on a collection page
 
     def to_json(self) -> dict:
@@ -1419,9 +1420,27 @@ def _generic_links(html: str, page_url: str) -> list:
     return out
 
 
+def _next_link(html: str, page_url: str) -> str:
+    """The address of the next page of a list, from rel="next", a "Next" link or a » / › arrow; '' if none."""
+    m = (re.search(r'<(?:a|link)\b[^>]*\brel=["\'][^"\']*\bnext\b[^"\']*["\'][^>]*\bhref=["\']([^"\']+)', html, re.I)
+         or re.search(r'<(?:a|link)\b[^>]*\bhref=["\']([^"\']+)["\'][^>]*\brel=["\'][^"\']*\bnext\b', html, re.I))
+    if not m:
+        for a in re.finditer(r'<a\b[^>]*\bhref=["\']([^"\'#]+)["\'][^>]*>(.*?)</a>', html, re.S | re.I):
+            label = re.sub(r"<[^>]+>|&[a-z#0-9]+;|\s+", " ", a.group(2)).strip().lower()
+            cls = a.group(0)[:200].lower()
+            if label in ("next", "next page", "next »", "›", "»", ">", "older", "next >") or "class=\"next" in cls \
+                    or "pagination-next" in cls or "page-next" in cls:
+                m = a
+                break
+    if not m:
+        return ""
+    nxt = urljoin(page_url, _html_unescape(m.group(1)))
+    return "" if nxt.split("#")[0].rstrip("/") == page_url.split("#")[0].rstrip("/") or nxt.lower().startswith("javascript") else nxt
+
+
 def _generic_listing(url: str, cfg: Config) -> tuple[str, list]:
-    """Page 1, 2, 3 ... of a profile / model page. The page-number style is not known, so the first few
-    styles are tried on page 2 (?page=2, /page/2/, /2/, ?p=2) and the first that brings new links is kept."""
+    """All pages of a profile / model page: follow the page's own "next" link; if it has none, try the common
+    page-number styles (?page=2, /page/2/, /2/, ?p=2) on page 2 and keep the first that brings new links."""
     base = url.split("#")[0]
     clean = re.sub(r"[?&](?:page|p)=\d+", "", base)
     path_only = clean.split("?")[0].rstrip("/")
@@ -1429,13 +1448,15 @@ def _generic_listing(url: str, cfg: Config) -> tuple[str, list]:
     sep = "&" if "?" in clean else "?"
     styles = [lambda n: f"{clean}{sep}page={n}", lambda n: f"{path_only}/page/{n}/{query}",
               lambda n: f"{path_only}/{n}/{query}", lambda n: f"{clean}{sep}p={n}"]
-    ents, seen = [], set()
+    ents, seen, visited = [], set(), set()
 
     def grab(page_url):
+        """-> (new links on that page, address of its next page)"""
+        visited.add(page_url)
         try:
             html = _page_html(page_url, url)
         except Exception:  # noqa: BLE001
-            return 0
+            return 0, ""
         new = 0
         for link, th, ti in _generic_links(html, page_url):
             if link in seen:
@@ -1443,18 +1464,29 @@ def _generic_listing(url: str, cfg: Config) -> tuple[str, list]:
             seen.add(link)
             new += 1
             ents.append({"url": link, "referer": url, "thumb": th, "filename": ""})
-        return new
+        return new, _next_link(html, page_url)
 
-    if not grab(base):
+    new, nxt = grab(base)
+    if not new:
         return "", ents
+    if nxt:  # the page tells us where the next one is
+        for _ in range(80):
+            if not nxt or nxt in visited or len(ents) >= MAX_COLLECTION:
+                break
+            new, nxt = grab(nxt)
+            if not new:
+                break
+        if len(ents) > 0 and not (nxt and nxt not in visited):
+            return "", ents
     style = None
-    for st in styles:  # find the page-number style that works
-        if grab(st(2)):
+    for st in styles:  # no usable "next" link: find the page-number style that works
+        new, _n = grab(st(2))
+        if new:
             style = st
             break
     if style is not None:
-        for n in range(3, 40):
-            if len(ents) >= MAX_COLLECTION or not grab(style(n)):
+        for n in range(3, 80):
+            if len(ents) >= MAX_COLLECTION or not grab(style(n))[0]:
                 break
     return "", ents
 
@@ -1509,8 +1541,9 @@ class Manager:
                 pass
 
     # --- queue ------------------------------------------------------------
-    def add(self, url: str, kind: str = "download", outdir: str = "") -> Item:
+    def add(self, url: str, kind: str = "download", outdir: str = "", html: str = "") -> Item:
         it = Item(url.strip(), kind, outdir)
+        it._dom_html = html  # the page as the Browse tab shows it (everything loaded by scrolling)
         self.items.append(it)
         if kind == "download" and collection_kind(it.url):  # album / profile: find every video first
             it.status = "Checking"
@@ -1519,10 +1552,20 @@ class Manager:
         return it
 
     def _expand_worker(self, it: Item) -> None:
+        dom = []
+        if it._dom_html:
+            try:
+                dom = [{"url": l, "referer": it.url, "thumb": th, "filename": ""}
+                       for l, th, _t in _generic_links(it._dom_html, it.url)]
+            except Exception:  # noqa: BLE001
+                dom = []
         try:
-            it._pending = expand_collection(it.url, self.cfg)
+            title, ents = expand_collection(it.url, self.cfg)
         except Exception:  # noqa: BLE001
-            it._pending = ("", [])
+            title, ents = "", []
+        have = {e["url"] for e in dom}
+        it._dom_html = ""
+        it._pending = (title, dom + [e for e in ents if e["url"] not in have])
 
     def _apply_expansion(self, it: Item) -> None:
         title, ents = it._pending

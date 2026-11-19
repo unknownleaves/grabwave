@@ -25,7 +25,7 @@ import ui_extra as UI
 import licensing as LIC
 import updater as U
 
-VERSION = "2.21"
+VERSION = "2.22"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -381,6 +381,8 @@ def open_path(p: str) -> None:
 
 class BrowserPane(QtWidgets.QWidget):
     addRequested = QtCore.Signal(str)
+    addListRequested = QtCore.Signal(str, str)  # page address, the page's HTML after scrolling to the end
+    statusMsg = QtCore.Signal(str)
     mediaFound = QtCore.Signal(dict)
     watchRequested = QtCore.Signal(str, str)  # page address, stream address the browser saw (or "")
 
@@ -512,11 +514,47 @@ class BrowserPane(QtWidgets.QWidget):
         if not u.lower().startswith(("http://", "https://")):
             return
         alt = self.best_media()
-        if alt and self.web is not None:
+        kind = E.collection_kind(u)
+        if kind in ("listing:generic", "listing:any") and self.web is not None \
+                and self.stack.currentWidget() is self.web:
+            self._harvest_add(u)  # a profile / model page: load the whole list first
+        elif alt and self.web is not None:
             self.mediaFound.emit({"media": "", "page": u, "title": self.web.title(), "referer": "",
                                   "alt": alt, "alt_referer": u})
         else:
             self.addRequested.emit(u)
+
+    def _harvest_add(self, u: str):
+        """Scroll the open page to the end (and press any "load more" button) so every video is on it, then
+        send its HTML for the video links to be read."""
+        page = self.web.page()
+        st = {"n": 0, "last": -1, "same": 0}
+        js = ("(function(){window.scrollTo(0,document.body.scrollHeight);"
+              "var b=[].slice.call(document.querySelectorAll('button,a,div,span')).filter(function(e){"
+              "return e.children.length<3&&e.offsetParent!==null&&"
+              "/^\\s*(load|show|view|see)\\s+more/i.test(e.textContent||'');});"
+              "if(b.length){try{b[0].click();}catch(e){}}"
+              "return document.querySelectorAll('a img').length;})()")
+
+        def finish(html):
+            self.statusMsg.emit("")
+            self.addListRequested.emit(u, html or "")
+
+        def got(count):
+            st["n"] += 1
+            st["same"] = st["same"] + 1 if count == st["last"] else 0
+            st["last"] = count
+            self.statusMsg.emit(f"Loading the whole page… {count or 0} thumbnails so far")
+            if st["same"] >= 3 or st["n"] >= 45:
+                page.toHtml(finish)
+            else:
+                QtCore.QTimer.singleShot(800, step)
+
+        def step():
+            page.runJavaScript(js, got)
+
+        self.statusMsg.emit("Loading the whole page…")
+        step()
 
     # --- stream sniffing ------------------------------------------------------
     def _on_sniff(self, url: str, first_party: str):
@@ -897,6 +935,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pages = QtWidgets.QStackedWidget()
         self.browser = BrowserPane(self.cfg)
         self.browser.addRequested.connect(self._add_from_browser)
+        self.browser.addListRequested.connect(self._add_list_from_browser)
+        self.browser.statusMsg.connect(lambda m: self.statusBar().showMessage(m, 60000) if m else self.statusBar().clearMessage())
         self.browser.mediaFound.connect(self._add_media)
         self.browser.watchRequested.connect(self._watch)
         self.browser.home.grabRequested.connect(lambda u: self._add_url(u))
@@ -1425,6 +1465,16 @@ class MainWindow(QtWidgets.QMainWindow):
         kind = "live" if E.cam_detect(url) else "download"
         self._add_urls([url], kind)
         self.statusBar().showMessage("Added to downloads", 2500)
+
+    def _add_list_from_browser(self, url: str, html: str):
+        if not self._gate():
+            return
+        it = self.mgr.add(url, "download", "", html)
+        self.model.reset()
+        self.mgr.save()
+        self.tab_dl.setChecked(True)
+        self._tab_changed()
+        self.statusBar().showMessage("Looking for the videos on the page…", 4000)
 
     def _add_media(self, info: dict):
         """Called when the page's Download button is clicked in the built-in browser."""
