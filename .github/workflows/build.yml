@@ -24,7 +24,7 @@ jobs:
         run: |
           import py_compile, sys
           from pathlib import Path
-          need = ["app.py", "engine.py", "ui_extra.py", "updater.py", "rollback.py", "Grabwave.spec", "VERSION_PLACEHOLDER"]
+          need = ["app.py", "engine.py", "ui_extra.py", "updater.py", "rollback.py", "licensing.py", "vr.py", "Grabwave.spec", "VERSION_PLACEHOLDER"]
           need.remove("VERSION_PLACEHOLDER")
           bad = [f for f in need if not Path(f).is_file()]
           for f in need:

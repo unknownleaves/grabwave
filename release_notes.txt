@@ -1,6 +1,7 @@
-Grabwave 2.22
+Grabwave 2.23
 
 New
+- VR videos: the built-in player has a VR menu. Pick the layout (it is guessed from the file name and picture size) and the two side-by-side pictures become one picture that you drag to look around, scroll to zoom, and double-click to reset.
 - Long profile pages (more than one page of videos): Grabwave follows the page's "next" links, and when you click the download button in the Browse tab on a profile it scrolls to the end first so every video is captured.
 - bodgirls.com: model pages such as /videos/models/NAME now work; page numbering is detected automatically.
 - bodgirls.com: model and profile pages download every video on them.

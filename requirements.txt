@@ -3,3 +3,4 @@ yt-dlp[default,curl-cffi]
 streamlink
 pyinstaller
 gallery-dl
+numpy

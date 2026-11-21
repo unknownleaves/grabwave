@@ -1680,7 +1680,19 @@ class PlayerDialog(QtWidgets.QDialog):
         lay.setSpacing(0)
         self.video = QVideoWidget()
         self.video.setStyleSheet("background: #000;")
-        lay.addWidget(self.video, 1)
+        self.vr = None
+        try:  # VR view (needs numpy); the player still works without it
+            import vr as VRMOD
+            self.VRMOD = VRMOD
+            if VRMOD.QtWidgets is not None:
+                self.vr = VRMOD.VRView()
+        except Exception:  # noqa: BLE001
+            self.vr = None
+        self.stage = QtWidgets.QStackedWidget()
+        self.stage.addWidget(self.video)
+        if self.vr is not None:
+            self.stage.addWidget(self.vr)
+        lay.addWidget(self.stage, 1)
         self.note = QtWidgets.QLabel("")
         self.note.setWordWrap(True)
         self.note.setStyleSheet(f"color: {RED}; padding: 6px 12px;")
@@ -1706,6 +1718,15 @@ class PlayerDialog(QtWidgets.QDialog):
         vol.setFixedWidth(90)
         vol.setToolTip("Volume")
         h.addWidget(vol)
+        self.vr_box = None
+        if self.vr is not None:
+            self.vr_box = QtWidgets.QComboBox()
+            self.vr_box.addItem("Normal video")
+            for m in self.VRMOD.MODES:
+                self.vr_box.addItem(m[1], m[0])
+            self.vr_box.setToolTip("VR video: show one eye as a single picture you can look around in "
+                                   "(drag to look, scroll to zoom, double-click to reset)")
+            h.addWidget(self.vr_box)
         self.full_btn = QtWidgets.QPushButton("Full screen")
         self.full_btn.setObjectName("small")
         h.addWidget(self.full_btn)
@@ -1729,11 +1750,51 @@ class PlayerDialog(QtWidgets.QDialog):
         vol.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
         self.play_btn.clicked.connect(self._toggle)
         self.full_btn.clicked.connect(self._fullscreen)
+        self._vr_touched = False
+        if self.vr_box is not None:
+            self.vr_box.activated.connect(self._vr_chosen)
+            self._vr_auto(0, 0)  # guess from the file name now, from the picture size when it is known
+            self.player.metaDataChanged.connect(self._vr_meta)
         if relay is not None or path.lower().startswith(("http://", "https://")):
             self.player.setSource(QtCore.QUrl(path))
         else:
             self.player.setSource(QtCore.QUrl.fromLocalFile(path))
         self.player.play()
+
+    # --- VR -------------------------------------------------------------------------------
+    def _vr_set(self, index: int):
+        """index 0 = normal video, otherwise a VR layout from the menu."""
+        if self.vr is None or self.vr_box is None:
+            return
+        self.vr_box.setCurrentIndex(index)
+        if index <= 0:
+            self.player.setVideoOutput(self.video)
+            self.stage.setCurrentWidget(self.video)
+        else:
+            self.vr.set_mode(self.vr_box.itemData(index))
+            self.player.setVideoSink(self.vr.sink)
+            self.stage.setCurrentWidget(self.vr)
+
+    def _vr_chosen(self, index: int):
+        self._vr_touched = True
+        self._vr_set(index)
+
+    def _vr_auto(self, w: int, h: int):
+        if self._vr_touched or self.vr is None:
+            return
+        key = self.VRMOD.detect_mode(os.path.basename(self.path) + " " + (self.windowTitle() or ""), w, h)
+        idx = self.vr_box.findData(key) if key else 0
+        if idx != self.vr_box.currentIndex():
+            self._vr_set(max(idx, 0))
+
+    def _vr_meta(self):
+        try:
+            from PySide6.QtMultimedia import QMediaMetaData
+            res = self.player.metaData().value(QMediaMetaData.Resolution)
+            if res is not None and res.width() > 0:
+                self._vr_auto(res.width(), res.height())
+        except Exception:  # noqa: BLE001
+            pass
 
     @staticmethod
     def _fmt(ms: int) -> str:
