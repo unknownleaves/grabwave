@@ -30,7 +30,7 @@ def detect_mode(name: str, width: int = 0, height: int = 0) -> str:
     fish = "fisheye" in n or "mkx200" in n or "mkx220" in n or "fe190" in n or "fe200" in n or "rf52" in n
     f360 = "360" in toks or "_360" in n or "360vr" in n or "vr360" in n
     f180 = "180" in toks or "_180" in n or "180x180" in n or "vr180" in n
-    vr = f360 or f180 or fish or "vr" in toks or "vrporn" in n or "3d" in toks or tb or sbs
+    vr = f360 or f180 or fish or "vr" in toks or "3d" in toks or tb or sbs
     if fish:
         return "fe200" if ("200" in n or "220" in n) else "fe190"
     if f360:

@@ -25,7 +25,7 @@ import ui_extra as UI
 import licensing as LIC
 import updater as U
 
-VERSION = "2.23"
+VERSION = "2.24"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -892,6 +892,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, mgr: E.Manager):
         super().__init__()
         self.mgr = mgr
+        mgr.confirm = self._confirm_batch
         self.cfg = mgr.cfg
         self.setWindowTitle(f"Grabwave {VERSION}")
         self.resize(1200, 800)
@@ -1041,6 +1042,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 hm.addAction("Buy Grabwave…", lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(LIC.BUY_URL)))
         hm.addSeparator()
         hm.addAction("Quick guide", self._guide)
+        hm.addAction("Copy diagnostics (for support)", self._copy_diagnostics)
         hm.addAction("Open log / settings folder", lambda: open_path(str(E.config_dir())))
         hm.addSeparator()
         hm.addAction("About Grabwave", self._about)
@@ -1465,6 +1467,25 @@ class MainWindow(QtWidgets.QMainWindow):
         kind = "live" if E.cam_detect(url) else "download"
         self._add_urls([url], kind)
         self.statusBar().showMessage("Added to downloads", 2500)
+
+    def _copy_diagnostics(self):
+        QtWidgets.QApplication.clipboard().setText(E.diagnostics(VERSION))
+        self.statusBar().showMessage("Copied. Paste it into your message to support.", 5000)
+
+    def _confirm_batch(self, group: str, n: int) -> int:
+        """Asked when one page would add many downloads. Returns how many to add (0 = none)."""
+        first = max(1, int(getattr(self.cfg, "confirm_batch_over", 25) or 25))
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Download all?")
+        box.setText(f"Found {n} videos" + (f" in {group}" if group else "") + ".")
+        box.setInformativeText("Grabwave downloads a few at a time from each site. A large batch can take a long "
+                               "while and a lot of disk space.")
+        a_all = box.addButton(f"Download all {n}", QtWidgets.QMessageBox.AcceptRole)
+        a_first = box.addButton(f"Just the first {min(first, n)}", QtWidgets.QMessageBox.ActionRole)
+        box.addButton("Cancel", QtWidgets.QMessageBox.RejectRole)
+        box.exec()
+        b = box.clickedButton()
+        return n if b is a_all else (min(first, n) if b is a_first else 0)
 
     def _add_list_from_browser(self, url: str, html: str):
         if not self._gate():
@@ -1927,6 +1948,15 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Grabwave.App")
         except Exception:
             pass
+    E._init_log()
+    E.LOG.info("Grabwave %s started", VERSION)
+    _old_hook = sys.excepthook
+
+    def _hook(et, ev, tb):  # unexpected errors go to the log file instead of vanishing
+        import traceback
+        E.LOG.error("unexpected error:\n%s", "".join(traceback.format_exception(et, ev, tb))[-3000:])
+        _old_hook(et, ev, tb)
+    sys.excepthook = _hook
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setApplicationName("Grabwave")

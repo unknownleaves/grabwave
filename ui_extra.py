@@ -473,6 +473,9 @@ def status_line(it: E.Item) -> tuple[str, str]:
         return "  ·  ".join(parts), RED
     if s == "Retrying":
         return "Trying another way…", MUTED
+    if s == "Retry later":
+        mins = max(1, int((getattr(it, "retry_at", 0) - time.time()) / 60 + 0.5))
+        return f"Busy site. Trying again in {mins} min", MUTED
     if s == "Waiting":
         return "Waiting for the stream to start…", MUTED
     if s == "Processing":
@@ -1089,7 +1092,7 @@ class TrimDialog(QtWidgets.QDialog):
 # ---- watchlist ---------------------------------------------------------------------------------
 LIMITS = [("No limit", 0, 0), ("Stop after 1 hour", 60, 0), ("Stop after 2 hours", 120, 0),
           ("Stop after 4 hours", 240, 0), ("Stop at 2 GB", 0, 2048), ("Stop at 5 GB", 0, 5120)]
-ACTIVE = ("Queued", "Checking", "Downloading", "Recording", "Waiting", "Processing")
+ACTIVE = ("Queued", "Checking", "Retry later", "Downloading", "Recording", "Waiting", "Processing")
 
 
 class Watcher(QtCore.QObject):

@@ -73,6 +73,52 @@ def config_dir() -> Path:
     return d
 
 
+# ----------------------------------------------------------------------------
+# Log file and diagnostics (Help > Copy diagnostics)
+# ----------------------------------------------------------------------------
+import logging
+import logging.handlers
+
+LOG = logging.getLogger("grabwave")
+
+
+def log_path() -> Path:
+    return config_dir() / "grabwave.log"
+
+
+def _init_log() -> None:
+    if LOG.handlers:
+        return
+    try:
+        h = logging.handlers.RotatingFileHandler(log_path(), maxBytes=800_000, backupCount=2, encoding="utf-8")
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        LOG.addHandler(h)
+        LOG.setLevel(logging.INFO)
+    except Exception:  # noqa: BLE001  (a read-only profile must never stop the app)
+        LOG.addHandler(logging.NullHandler())
+
+
+def diagnostics(version: str = "") -> str:
+    """Plain text a person can paste into a message: versions, system, and the end of the log."""
+    import platform
+    parts = [f"Grabwave {version}", f"{platform.system()} {platform.release()} {platform.machine()}",
+             f"Python {platform.python_version()}"]
+    for mod in ("yt_dlp", "streamlink", "curl_cffi", "PySide6"):
+        try:
+            m = __import__(mod)
+            v = getattr(getattr(m, "version", m), "__version__", "") or getattr(m, "__version__", "")
+            parts.append(f"{mod} {v}")
+        except Exception:  # noqa: BLE001
+            parts.append(f"{mod} not available")
+    parts.append(f"ffmpeg: {'found' if find_ffmpeg() else 'missing'}")
+    try:
+        lines = log_path().read_text("utf-8", "replace").splitlines()[-150:]
+    except Exception:  # noqa: BLE001
+        lines = []
+    return "\n".join(parts) + "\n\n--- log (last lines) ---\n" + "\n".join(lines)
+
+
+
 def _prepare_path() -> None:
     """Let the app find an ffmpeg that sits next to the executable."""
     d = str(app_dir())
@@ -285,6 +331,7 @@ class Config:
     auto_engine: bool = True           # keep the video engine (yt-dlp) fresh in the background
     engine_checked: float = 0.0
     check_updates: bool = True         # offer new versions when Grabwave opens
+    confirm_batch_over: int = 25       # ask before adding more than this many videos from one page (0 = never ask)
     update_url: str = ""               # empty = the built-in address (updater.DEFAULT_MANIFEST_URL)
 
     @staticmethod
@@ -398,6 +445,8 @@ class Item:
         self._tmp = ""
         self._final = ""
         self._dom_html = ""
+        self.attempts = 0      # automatic second tries used
+        self.retry_at = 0.0    # when the next automatic try starts
         self._pending = None  # result of looking for the videos on a collection page
 
     def to_json(self) -> dict:
@@ -414,6 +463,8 @@ class Item:
                 setattr(it, k, v)
         if it.status == "Retrying":
             it.status = "Failed"
+        if it.status == "Retry later":  # closed while waiting to retry: start it again
+            it.status = "Queued"
         if it.status == "Checking":  # closed while looking for videos: just download the link normally
             it.status = "Queued"
         if it.status in RUNNING_STATES:  # app was closed while running
@@ -896,7 +947,7 @@ def run_live_streamlink(item: Item, cfg: Config) -> None:
                 stream = cam_open_stream(sl, item.url, cfg.live_quality, cfg.cookies_browser, cookie_file)
             except CamOffline as e:
                 why = f"offline/not public: {e}"
-            except Exception as e:  # site blocked our direct lookup (e.g. Stripchat HTTP 418)
+            except Exception as e:  # site blocked our direct lookup (e.g. HTTP 418)
                 why = f"blocked by the site: {str(e)[:70]}"
                 # 1) the stream address the built-in browser saw while the room was playing
                 if item.alt_url:
@@ -1045,6 +1096,18 @@ def run_live(item: Item, cfg: Config) -> None:
 _ANSI = __import__("re").compile(r"\x1b\[[0-9;]*[A-Za-z]")  # colour codes yt-dlp puts in error text
 
 
+_TRANSIENT = re.compile(r"429|too many|rate.?limit|timed? ?out|timeout|temporar|connection (?:reset|aborted|refused|error)|"
+                        r"reset by peer|remote end closed|HTTP Error 5\d\d|\b50[0-4]\b|incomplete read|ssl|"
+                        r"unable to download (?:webpage|video data)|try again", re.I)
+_PERMANENT = re.compile(r"unsupported url|private|removed|deleted|not available|does not exist|404|410|"
+                        r"sign in|log in|login|members only|age.?verif|drm|no video found|errno|no such file", re.I)
+
+
+def _transient(err: str) -> bool:
+    """True when the failure looks like a passing problem (busy or rate-limiting site, dropped connection)."""
+    return bool(_TRANSIENT.search(err or "")) and not _PERMANENT.search(err or "")
+
+
 def _worker(item: Item, cfg: Config) -> None:
     try:
         try:
@@ -1066,6 +1129,11 @@ def _worker(item: Item, cfg: Config) -> None:
         else:
             item.status = "Failed"
             item.error = _ANSI.sub("", str(e))[:3000]
+            LOG.warning("failed: %s | %s", item.url, item.error.replace("\n", " ")[:400])
+            if item.kind == "download" and item.attempts < 2 and _transient(item.error):
+                item.attempts += 1
+                item.retry_at = time.time() + (120 if item.attempts == 1 else 480)
+                item.status = "Retry later"
             low = item.url.lower()
             file_trouble = "Errno" in item.error or "No such file" in item.error
             if file_trouble:
@@ -1073,12 +1141,12 @@ def _worker(item: Item, cfg: Config) -> None:
                                "main drive (Settings or the Change button next to Save to). Network and cloud "
                                "drives sometimes refuse downloads.")
             if ("x.com/" in low or "twitter.com/" in low) and not item.alt_url and not file_trouble:
-                item.error += ("\n\nHint: X shows many videos only to signed-in accounts (adult/sensitive posts, "
+                item.error += ("\n\nHint: X shows many videos only to signed-in accounts (sensitive or "
                                "age-restricted posts). In the Browse tab open x.com, sign in once, then add the "
                                "link again. Grabwave reuses that sign-in. Posts that were deleted, or are from a "
                                "private account you don't follow, can't be downloaded.")
             if "beeg." in low and not item.alt_url:
-                item.error += ("\n\nHint: Beeg changed its site and yt-dlp can't read it from the link alone. "
+                item.error += ("\n\nHint: This site changed and yt-dlp can't read it from the link alone. "
                                "Open the video in the built-in browser, let it start loading, then click the "
                                "Download button on the page (or the address-bar download button).")
     finally:
@@ -1102,7 +1170,7 @@ MAX_COLLECTION = 500
 
 
 def collection_kind(url: str) -> str:
-    """'erome-album' | 'erome-profile' | 'redgifs-user' | 'listing:<site>' | '' (anything else is one video)."""
+    """Kind of list page this address is ("" = one video): album / profile / user / listing:<reader>."""
     try:
         p = urlparse(url)
     except Exception:  # noqa: BLE001
@@ -1496,7 +1564,7 @@ def _safe_name(t: str) -> str:
 
 
 def expand_collection(url: str, cfg: Config) -> tuple[str, list]:
-    """Every video on an erome album/profile or a redgifs profile -> (group title, [entry dict, ...]).
+    """Every video on an album / profile / channel page -> (group title, [entry dict, ...]).
     Tries Grabwave's own page reader first, then yt-dlp, then gallery-dl. Empty list = not a collection."""
     kind = collection_kind(url)
     if not kind:
@@ -1508,7 +1576,8 @@ def expand_collection(url: str, cfg: Config) -> tuple[str, list]:
     for fn in routes:
         try:
             title, ents = fn(url, cfg)
-        except Exception:  # noqa: BLE001
+        except Exception as ex:  # noqa: BLE001
+            LOG.info("page reader %s failed for %s: %s", getattr(fn, "__name__", fn), url, str(ex)[:200])
             continue
         seen, uniq = set(), []
         for e in ents:
@@ -1528,9 +1597,17 @@ def expand_collection(url: str, cfg: Config) -> tuple[str, list]:
 
 class Manager:
     def __init__(self, cfg: Config):
+        _init_log()
         self.cfg = cfg
         self.items: list[Item] = []
         self.notice = ""  # one-line message for the status bar (e.g. "Found 12 videos")
+        self.confirm = None     # optional callback(group, count) -> how many to keep (0 = cancel); set by the window
+        self._asking = False
+        self._host_last: dict = {}
+        self._free_checked = 0.0
+        self._free_mb = 10 ** 9
+        self._saved_at = time.time()
+        self._low_said = 0.0
         self._threads: dict[str, threading.Thread] = {}
         self.load()
         for old in config_dir().glob("cj_*.txt"):  # leftover private cookie copies
@@ -1541,7 +1618,28 @@ class Manager:
                 pass
 
     # --- queue ------------------------------------------------------------
+    @staticmethod
+    def _key(url: str) -> str:
+        u = _normalize_url((url or "").strip()).split("#")[0].rstrip("/").lower()
+        return re.sub(r"^https?://(www\.)?", "", u)
+
+    def _existing(self, url: str, skip=None):
+        k = self._key(url)
+        for i in self.items:
+            if i is skip or self._key(i.url) != k:
+                continue
+            if i.status in ("Failed", "Stopped"):
+                continue
+            if i.status == "Completed" and i.path and not os.path.exists(i.path):
+                continue  # the saved file is gone: allow downloading it again
+            return i
+        return None
+
     def add(self, url: str, kind: str = "download", outdir: str = "", html: str = "") -> Item:
+        dup = self._existing(url) if kind == "download" else None
+        if dup is not None:
+            self.notice = "That link is already in your list."
+            return dup
         it = Item(url.strip(), kind, outdir)
         it._dom_html = html  # the page as the Browse tab shows it (everything loaded by scrolling)
         self.items.append(it)
@@ -1561,7 +1659,8 @@ class Manager:
                 dom = []
         try:
             title, ents = expand_collection(it.url, self.cfg)
-        except Exception:  # noqa: BLE001
+        except Exception as ex:  # noqa: BLE001
+            LOG.warning("expand failed for %s: %s", it.url, str(ex)[:200])
             title, ents = "", []
         have = {e["url"] for e in dom}
         it._dom_html = ""
@@ -1580,9 +1679,41 @@ class Manager:
         outdir = it.outdir
         if not outdir and len(ents) > 1 and group:
             outdir = str(Path(self.cfg.download_dir) / group)
+        total = len(ents)
+        kept = []
+        for e in ents:  # skip what is already in the list or already saved
+            if self._existing(e["url"], skip=it) is not None:
+                continue
+            fn = e.get("filename", "")
+            if fn and outdir:
+                import glob
+                if glob.glob(os.path.join(glob.escape(outdir), glob.escape(fn) + ".*")):
+                    continue
+            kept.append(e)
+        skipped = total - len(kept)
+        if not kept:
+            self.items.remove(it)
+            self.notice = f"Nothing new: all {total} videos are already in your list or saved."
+            self.save()
+            return
+        limit = int(getattr(self.cfg, "confirm_batch_over", 25) or 0)
+        if limit and len(kept) > limit and callable(self.confirm):
+            self._asking = True
+            try:
+                n = int(self.confirm(group, len(kept)) or 0)
+            except Exception:  # noqa: BLE001
+                n = len(kept)
+            finally:
+                self._asking = False
+            if n <= 0:
+                self.items.remove(it)
+                self.notice = "Cancelled. Nothing was added."
+                self.save()
+                return
+            kept = kept[:n]
         base = list(self.items).index(it)
         extra = []
-        for n, e in enumerate(ents):
+        for n, e in enumerate(kept):
             tgt = it if n == 0 else Item(e["url"], "download", outdir)
             tgt.url, tgt.outdir = e["url"], outdir
             tgt.referer = e.get("referer", "") if e["url"] != e.get("referer") else ""
@@ -1597,22 +1728,79 @@ class Manager:
             if n:
                 extra.append(tgt)
         self.items[base + 1:base + 1] = extra
-        self.notice = f"Found {len(ents)} video{'s' if len(ents) != 1 else ''}" + (f" in {group}" if group else "") + "."
+        self.notice = f"Found {total} video{'s' if total != 1 else ''}" + (f" in {group}" if group else "") + \
+            (f"; {len(kept)} added, {skipped} already there" if skipped or len(kept) != total else "") + "."
+        LOG.info("expanded %s -> %d (kept %d)", it.url, total, len(kept))
         self.save()
 
     def active_count(self) -> int:
         return sum(1 for i in self.items if i.running)
 
+    HOST_LIMIT = 3       # most downloads at once from one site
+    HOST_GAP = 1.2       # seconds between starting two downloads from one site
+    MIN_FREE_MB = 1024   # do not start new downloads below this much free space
+    STOP_FREE_MB = 250   # stop recordings below this much free space
+
+    @staticmethod
+    def _site(url: str) -> str:
+        h = (urlparse(url).hostname or "").lower()
+        return ".".join(h.split(".")[-2:]) if h else ""
+
+    def _free(self) -> int:
+        now = time.time()
+        if now - self._free_checked > 10:
+            self._free_checked = now
+            p = Path(self.cfg.download_dir)
+            while not p.exists() and p.parent != p:
+                p = p.parent
+            try:
+                self._free_mb = shutil.disk_usage(str(p)).free // (1024 * 1024)
+            except Exception:  # noqa: BLE001
+                self._free_mb = 10 ** 9
+        return self._free_mb
+
     def tick(self) -> None:
+        if self._asking:  # a question is open on screen
+            return
+        now = time.time()
         for it in [i for i in self.items if i._pending is not None]:
             self._apply_expansion(it)
+        for it in self.items:  # automatic second tries
+            if it.status == "Retry later" and now >= it.retry_at:
+                it.status = "Queued"
+        free = self._free()
+        if free < self.STOP_FREE_MB:
+            for it in self.items:
+                if it.running and it.kind == "live":
+                    self.request_stop(it, "stop")
+        low = free < self.MIN_FREE_MB
+        if low and now - self._low_said > 60:
+            self._low_said = now
+            self.notice = f"Low disk space ({free} MB free). New downloads wait until there is more room."
         slots = effective_slots(self.cfg) - self.active_count()
+        per_site: dict = {}
+        for i in self.items:
+            if i.running and i.kind == "download":
+                k = self._site(i.url)
+                per_site[k] = per_site.get(k, 0) + 1
         for it in self.items:
             if slots <= 0:
                 break
-            if it.status == "Queued" and not it.running:
-                self._start(it)
-                slots -= 1
+            if it.status != "Queued" or it.running:
+                continue
+            if low and it.kind == "download":
+                continue
+            if it.kind == "download":
+                k = self._site(it.url)
+                if per_site.get(k, 0) >= self.HOST_LIMIT or now - self._host_last.get(k, 0) < self.HOST_GAP:
+                    continue
+                per_site[k] = per_site.get(k, 0) + 1
+                self._host_last[k] = now
+            self._start(it)
+            slots -= 1
+        if now - self._saved_at > 30:  # keep the list safe if the computer loses power
+            self._saved_at = now
+            self.save()
 
     def _start(self, it: Item) -> None:
         it.stop = threading.Event()
@@ -1830,7 +2018,7 @@ def _watch_headers(url: str, extra: dict | None = None) -> dict:
 
 
 def _cam_watch_input(url: str, cfg: Config, alt_url: str, alt_referer: str):
-    """Live room (Stripchat, XHamsterLive, Chaturbate): returns (playlist address, headers) or raises."""
+    """Live room: returns (playlist address, headers) or raises."""
     if alt_url and ".m3u8" in alt_url.lower():  # the address the built-in browser saw is the surest route
         return alt_url, _watch_headers(alt_referer or url)
     sl = _new_session(cfg)
@@ -2120,13 +2308,13 @@ def _chaturbate(http, url: str) -> list[str]:
                  "Referer": f"https://chaturbate.com/{user}/"},
         cookies={"csrftoken": tok},
     )
-    d = _cam_get_json(r, "Chaturbate API")
+    d = _cam_get_json(r, "Live-room API")
     status = str(d.get("room_status", "unknown"))
     if d.get("success") and status == "public" and d.get("url"):
         return [d["url"]]
     if not d.get("url"):
         raise CamOffline(status)
-    raise RuntimeError(f"Chaturbate: unexpected API response {str(d)[:300]}")
+    raise RuntimeError(f"Live room: unexpected API response {str(d)[:300]}")
 
 
 def _stripchat(http, url: str) -> list[str]:
@@ -2136,7 +2324,7 @@ def _stripchat(http, url: str) -> list[str]:
         f"https://{host}/api/front/v2/models/username/{user}/cam",
         headers={"X-Requested-With": "XMLHttpRequest", "Referer": url},
     )
-    d = _cam_get_json(r, "Stripchat API")
+    d = _cam_get_json(r, "Live-room API")
     try:
         cam = d["cam"]
         u = d["user"]["user"]

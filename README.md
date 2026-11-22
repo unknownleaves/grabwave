@@ -28,11 +28,11 @@ py -3 -m venv .venv && .venv\Scripts\activate && pip install -r requirements.txt
 ```
 Put ffmpeg in an `ffmpeg` folder next to `app.py`.
 
-## Sites whose yt-dlp extractor is broken (e.g. Beeg)
+## Sites whose yt-dlp extractor is broken
 Open the video in the built-in browser, let it start loading, then click the Download button on the page (or the
 address-bar download button). Grabwave remembers the stream address the page requested and uses it when downloading
 from the page link fails.
 
 ## Files
-`app.py` window - `engine.py` queue, downloads, recording, updates - `camsites.py` live-room lookups -
+`app.py` window - `engine.py` queue, downloads, recording, updates - `ui_extra.py` windows and dialogs - `vr.py` VR player view - `licensing.py` trial and license keys -
 `Grabwave.spec` PyInstaller recipe - `installer/Grabwave.iss` Windows installer, `packaging/` macOS and Linux packaging - `assets/` icon (`make_icon.py` redraws it).

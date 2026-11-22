@@ -75,6 +75,10 @@ jobs:
           sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libnss3 \
             libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 libfuse2
+      - name: Self-test
+        run: |
+          pip install -r requirements.txt
+          python tests/run.py
       - run: bash build_linux.sh
       - uses: actions/upload-artifact@v4
         with: { name: Grabwave-Linux-AppImage, path: dist/Grabwave-x86_64.AppImage }
