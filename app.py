@@ -25,7 +25,7 @@ import ui_extra as UI
 import licensing as LIC
 import updater as U
 
-VERSION = "2.25"
+VERSION = "2.26"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -191,7 +191,11 @@ def pick_best_media(urls: list, referer: str = "", probe: bool = False) -> str:
     pls = [u for u in real if ext(u).endswith(".m3u8")]
     if pls:
         masters = [u for u in pls if "master" in u.lower()]
-        return (masters or pls)[0]
+        if masters:
+            return masters[-1]
+        # no master playlist: the page's player climbs from low to high quality, so prefer the highest
+        # announced height, and the most recently requested one when they tie
+        return max(enumerate(pls), key=lambda t: (E._url_height(t[1]), t[0]))[1]
     mpd = [u for u in real if ext(u).endswith(".mpd")]
     if mpd:
         return mpd[0]

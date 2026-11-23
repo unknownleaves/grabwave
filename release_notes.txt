@@ -1,6 +1,7 @@
-Grabwave 2.25
+Grabwave 2.26
 
 New
+- Best quality: when a video is saved from the stream the page was playing, Grabwave now looks for the highest quality version of that stream first (the page's player often starts on a low one).
 - More album and profile sites: pages that list albums are followed into each album, and every video in them is downloaded.
 - Albums, profiles, channels and playlists: paste one and Grabwave finds every video on it and downloads them all, each as its own item in a folder named after the page. Long pages are followed page by page, and in the Browse tab the download button scrolls the page to the end first.
 - Asks before adding a large batch, and skips videos that are already in your list or already saved.

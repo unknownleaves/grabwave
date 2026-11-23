@@ -578,6 +578,146 @@ def _normalize_url(url: str) -> str:
     return url
 
 
+# ----------------------------------------------------------------------------
+# Best quality of a captured stream address
+# ----------------------------------------------------------------------------
+_HEIGHTS = (2160, 1440, 1080, 720, 480, 360, 240)
+
+
+def _url_height(u: str) -> int:
+    """Picture height a stream address announces (".../720p/...", "_1080.mp4", "1280x720"), 0 if it says nothing."""
+    p = u.split("?")[0].lower()
+    m = re.search(r"(?<!\d)(\d{3,4})p(?![a-z])", p) or re.search(r"\d{3,4}x(\d{3,4})", p) or \
+        re.search(r"[/_=.,-](2160|1440|1080|720|480|360|240)(?=[/_.,&=-]|$)", p)
+    return int(m.group(1)) if m else 0
+
+
+def _quick_get(url: str, referer: str = "") -> str:
+    return _page_html(url, referer, None, 6)
+
+
+def _best_in_master(text: str, base: str, cap: int = 0) -> tuple:
+    """(height, bandwidth, address) of the best variant of a master playlist; honours a height cap."""
+    vs = []
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if not ln.startswith("#EXT-X-STREAM-INF"):
+            continue
+        res = re.search(r"RESOLUTION=(\d+)x(\d+)", ln)
+        bw = re.search(r"(?:AVERAGE-)?BANDWIDTH=(\d+)", ln)
+        uri = next((x.strip() for x in lines[i + 1:i + 4] if x.strip() and not x.startswith("#")), "")
+        if uri:
+            h = int(res.group(2)) if res else _url_height(uri)
+            vs.append((h, int(bw.group(1)) if bw else 0, urljoin(base, uri)))
+    if cap:
+        ok = [v for v in vs if v[0] and v[0] <= cap]
+        vs = ok or vs
+    return max(vs, key=lambda v: (v[0], v[1])) if vs else (0, 0, "")
+
+
+def _is_playlist(text: str) -> bool:
+    return text.lstrip().startswith("#EXTM3U")
+
+
+def upgrade_stream(url: str, referer: str = "", cap: int = 0) -> str:
+    """A better-quality address for the same video, or the address itself. A page's own player often starts on a
+    low quality, so the address captured from it may be a small variant. Looks for the master playlist, and for
+    the same address with a higher resolution in it (".../480p/..." -> ".../1080p/...")."""
+    try:
+        return _upgrade_stream(url, referer, cap) or url
+    except Exception as ex:  # noqa: BLE001
+        LOG.info("upgrade_stream failed for %s: %s", url, str(ex)[:150])
+        return url
+
+
+def _upgrade_stream(url: str, referer: str, cap: int) -> str:
+    from concurrent.futures import ThreadPoolExecutor
+    base = url.split("?")[0]
+    query = url[len(base):]
+    low = base.lower()
+    h0 = _url_height(url)
+    is_pl = low.endswith(".m3u8")
+    is_file = low.endswith((".mp4", ".webm", ".m4v", ".mov"))
+    if not (is_pl or is_file):
+        return url
+    if is_pl:
+        text = _quick_get(url, referer)
+        if "#EXT-X-STREAM-INF" in text:  # a master playlist: the downloader picks its best variant and keeps the audio
+            return url
+    # candidates: the same address with a larger height in it, and master playlists next to it
+    cands = []
+    tok = None
+    for mm in re.finditer(r"(?<!\d)(2160|1440|1080|720|480|360|240)(?!\d)", base):
+        tok = mm  # the last announced height in the address
+    if tok is not None:
+        cur = int(tok.group(1))
+        for H in _HEIGHTS:
+            if H > cur and (not cap or H <= cap):
+                cands.append((H, base[:tok.start()] + str(H) + base[tok.end():] + query))
+    if is_pl:
+        d1 = base.rsplit("/", 1)[0]
+        d2 = d1.rsplit("/", 1)[0] if "/" in d1[8:] else d1
+        for d in dict.fromkeys([d1, d2]):
+            for nm in ("master.m3u8", "index.m3u8", "playlist.m3u8", "master_playlist.m3u8"):
+                cu = f"{d}/{nm}{query}"
+                if cu != url:
+                    cands.append((0, cu))
+
+    def check(c):
+        H, cu = c
+        try:
+            if is_pl:
+                t = _quick_get(cu, referer)
+                if not _is_playlist(t):
+                    return None
+                if "#EXT-X-STREAM-INF" in t:
+                    h, bw, _best = _best_in_master(t, cu, cap)
+                    return (h or 1, bw, cu)  # the master itself, so separate audio is kept
+                return (H, 0, cu)
+            t = _quick_get_head(cu, referer)  # a file: does the larger one exist?
+            return (H, t, cu) if t > 100_000 else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    if not cands:
+        return url
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        found = [r for r in ex.map(check, cands[:14]) if r]
+    found = [r for r in found if r[0] > h0 or (is_pl and r[0] >= 1 and h0 == 0)]
+    if not found:
+        return url
+    best = max(found, key=lambda r: (r[0], r[1]))
+    LOG.info("better stream found: %s -> %s", url, best[2])
+    return best[2]
+
+
+def _quick_get_head(url: str, referer: str = "") -> int:
+    """Size in bytes of a direct file (0 if it is missing or not a video)."""
+    import ssl
+    import urllib.request
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        ctx = ssl.create_default_context()
+    req = urllib.request.Request(url, headers={"Range": "bytes=0-0", "Referer": referer or url,
+                                               "User-Agent": browser_ua() or "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=6, context=ctx) as r:
+        ct = (r.headers.get("Content-Type") or "").lower()
+        if ct and not (ct.startswith("video/") or "octet-stream" in ct or "mpegurl" in ct):
+            return 0
+        cr = r.headers.get("Content-Range", "")
+        if "/" in cr and cr.split("/")[-1].isdigit():
+            return int(cr.split("/")[-1])
+        return int(r.headers.get("Content-Length") or 0)
+
+
+def _quality_cap(item, cfg) -> int:
+    q = (getattr(item, "quality", "") or cfg.quality or "")
+    q = q[:-1] if q.endswith("p") else ""
+    return int(q) if q.isdigit() else 0
+
+
 def run_download(item: Item, cfg: Config) -> None:
     """Try the page/media URL with yt-dlp; then again without the browser cookies (stale sign-ins break some
     sites, e.g. X/Twitter); then the stream address the browser pane captured (item.alt_url)."""
@@ -621,21 +761,23 @@ def run_download(item: Item, cfg: Config) -> None:
                 if item.stop.is_set():
                     raise
     if item.alt_url:
-        reset()
         ref = item.alt_referer or item.referer or item.url
-        try:
-            _download_once(item, cfg, item.alt_url, ref, True)
-            return
-        except Exception:  # noqa: BLE001
-            if item.stop.is_set():
-                raise
-        reset()
-        try:  # second way for a stream address: let ffmpeg copy it straight into a file
-            _ffmpeg_copy(item, cfg, item.alt_url, ref)
-            return
-        except Exception:  # noqa: BLE001
-            if item.stop.is_set():
-                raise
+        best = upgrade_stream(item.alt_url, ref, _quality_cap(item, cfg))  # the page's player may have been on a low quality
+        for addr in dict.fromkeys([best, item.alt_url]):
+            reset()
+            try:
+                _download_once(item, cfg, addr, ref, True)
+                return
+            except Exception:  # noqa: BLE001
+                if item.stop.is_set():
+                    raise
+            reset()
+            try:  # second way for a stream address: let ffmpeg copy it straight into a file
+                _ffmpeg_copy(item, cfg, addr, ref)
+                return
+            except Exception:  # noqa: BLE001
+                if item.stop.is_set():
+                    raise
     # last resort: gallery-dl knows many picture / video sites that yt-dlp doesn't
     if item.kind == "download" and url.lower().startswith(("http://", "https://")):
         reset()
@@ -1219,12 +1361,12 @@ def collection_kind(url: str) -> str:
     return ""
 
 
-def _page_html(url: str, referer: str = "", headers: dict | None = None) -> str:
+def _page_html(url: str, referer: str = "", headers: dict | None = None, timeout: int = 25) -> str:
     hdr = {"User-Agent": browser_ua() or "Mozilla/5.0", "Referer": referer or url, "Accept-Language": "en-US,en;q=0.9"}
     hdr.update(headers or {})
     try:
         from curl_cffi import requests as cr
-        r = cr.get(url, headers=hdr, impersonate="chrome", timeout=25)
+        r = cr.get(url, headers=hdr, impersonate="chrome", timeout=timeout)
         if r.status_code < 400:
             return r.text
     except Exception:  # noqa: BLE001
@@ -1236,7 +1378,7 @@ def _page_html(url: str, referer: str = "", headers: dict | None = None) -> str:
         ctx = ssl.create_default_context(cafile=certifi.where())
     except Exception:  # noqa: BLE001
         ctx = ssl.create_default_context()
-    with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=25, context=ctx) as r:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=timeout, context=ctx) as r:
         return r.read(4_000_000).decode("utf-8", "replace")
 
 
@@ -2148,8 +2290,9 @@ def resolve_stream(url: str, cfg: Config, alt_url: str = "", alt_referer: str = 
                         "title": ""}
         except Exception:  # noqa: BLE001
             pass
-    if alt_url:  # a stream address the built-in browser saw
-        return {"inputs": [alt_url], "headers": _watch_headers(alt_referer or url), "title": ""}
+    if alt_url:  # a stream address the built-in browser saw (in its best quality)
+        return {"inputs": [upgrade_stream(alt_url, alt_referer or url, 1080)],
+                "headers": _watch_headers(alt_referer or url), "title": ""}
     raise RuntimeError(errors[0] if errors else "Couldn't find a video on this page.")
 
 

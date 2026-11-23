@@ -111,6 +111,21 @@ check("second paste skips what is already there", len(m4.items) == 40, len(m4.it
 m4.add("https://www.redgifs.com/users/bob"); time.sleep(.4); m4.tick()
 check("pasting again adds nothing", len(m4.items) == 40 and "Nothing new" in m4.notice, m4.notice)
 
+# --- best quality of a captured stream
+_master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360\n360p/i.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n1080p/i.m3u8\n"
+_media = "#EXTM3U\n#EXTINF:6,\nseg0.ts\n"
+_web = {"https://v.com/x/master.m3u8": _master, "https://v.com/x/480p/i.m3u8": _media, "https://v.com/x/720p/i.m3u8": _media}
+E._quick_get = lambda u, r="": _web[u] if u in _web else (_ for _ in ()).throw(RuntimeError("404"))
+check("quality: a master playlist is kept (audio stays)", E.upgrade_stream("https://v.com/x/master.m3u8") == "https://v.com/x/master.m3u8")
+check("quality: low variant finds the master", E.upgrade_stream("https://v.com/x/480p/i.m3u8") == "https://v.com/x/master.m3u8")
+del _web["https://v.com/x/master.m3u8"]
+check("quality: low variant finds a higher one", E.upgrade_stream("https://v.com/x/480p/i.m3u8") == "https://v.com/x/720p/i.m3u8")
+check("quality: cap respected", E.upgrade_stream("https://v.com/x/480p/i.m3u8", "", 480) == "https://v.com/x/480p/i.m3u8")
+_sz = {"https://c.com/v_1080p.mp4": 9_000_000}
+E._quick_get_head = lambda u, r="": _sz.get(u, 0)
+check("quality: direct file finds the larger one", E.upgrade_stream("https://c.com/v_480p.mp4") == "https://c.com/v_1080p.mp4")
+check("quality: nothing to find leaves it alone", E.upgrade_stream("https://c.com/abc.mp4") == "https://c.com/abc.mp4")
+
 # --- VR math -------------------------------------------------------------------------------
 import vr
 check("vr: name hint", vr.detect_mode("scene_180_3dh_LR.mp4", 3840, 1920) == "180sbs")
