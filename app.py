@@ -25,7 +25,7 @@ import ui_extra as UI
 import licensing as LIC
 import updater as U
 
-VERSION = "2.28"
+VERSION = "2.29"
 
 try:  # the built-in browser needs Qt WebEngine (shipped with the PySide6 wheels)
     from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -1668,8 +1668,7 @@ class MainWindow(QtWidgets.QMainWindow):
             relay.stop()
             self._on_watch_failed(f"The built-in player isn't available ({ex}).")
             return
-        self._players = [p for p in getattr(self, "_players", []) if p.isVisible()] + [dlg]
-        dlg.show()
+        self._show_player(dlg)
 
     def _on_watch_failed(self, msg: str):
         QtWidgets.QMessageBox.information(
@@ -1685,8 +1684,31 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:  # noqa: BLE001
             open_path(path)
             return
-        self._players = [p for p in getattr(self, "_players", []) if p.isVisible()] + [dlg]
-        dlg.show()
+        self._show_player(dlg)
+
+    def _show_player(self, dlg):
+        """Show a player window and keep it alive. Closed windows are deleted by Qt, so the list is only ever
+        changed through the window's own destroyed signal and never asks a deleted window anything."""
+        if not hasattr(self, "_players"):
+            self._players = []
+        self._players.append(dlg)
+
+        def gone(*_a, d=dlg):
+            try:
+                self._players.remove(d)
+            except ValueError:
+                pass
+        dlg.destroyed.connect(gone)
+        try:
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+        except Exception:  # noqa: BLE001  (never leave a player running with no window)
+            try:
+                dlg.close()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
     def _shelf_folder(self, it: E.Item):
         if it.path and os.path.exists(it.path):

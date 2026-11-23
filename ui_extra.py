@@ -1862,6 +1862,8 @@ class PlayerDialog(QtWidgets.QDialog):
     def closeEvent(self, e):
         try:
             self.player.stop()
+            self.player.setVideoOutput(None)
+            self.player.setSource(QtCore.QUrl())
         except Exception:
             pass
         if self.relay is not None:  # stop ffmpeg and the private local address

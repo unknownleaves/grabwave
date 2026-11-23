@@ -1,4 +1,7 @@
-Grabwave 2.28
+Grabwave 2.29
+
+Fixed
+- The video player now opens every time. Before, after closing one player, the next video could start playing in the background with no window until Grabwave was restarted.
 
 New
 - Finished downloads show their picture height (for example 1080p) next to the size and length, and the log records how each file was fetched.
