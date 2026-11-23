@@ -484,6 +484,8 @@ def status_line(it: E.Item) -> tuple[str, str]:
         bits = [E.fmt_size(it.done or it.total)]
         if it.duration:
             bits.append(E.fmt_dur(it.duration))
+        if getattr(it, "info", ""):
+            bits.append(it.info)
         return "  ·  ".join(bits), MUTED
     if s == "Paused":
         return "Paused" + (f"  ·  {pct}%" if pct is not None else ""), MUTED

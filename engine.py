@@ -445,13 +445,15 @@ class Item:
         self._tmp = ""
         self._final = ""
         self._dom_html = ""
+        self.info = ""         # picture size of the saved file, e.g. "1080p"
+        self.route = ""        # which way the file was fetched (for the log)
         self.attempts = 0      # automatic second tries used
         self.retry_at = 0.0    # when the next automatic try starts
         self._pending = None  # result of looking for the videos on a collection page
 
     def to_json(self) -> dict:
         keys = ("id", "url", "kind", "outdir", "referer", "filename", "title", "status", "done", "total",
-                "path", "error", "added", "alt_url", "alt_referer", "thumb", "duration", "quality",
+                "path", "error", "added", "alt_url", "alt_referer", "thumb", "duration", "quality", "info",
                 "limit_min", "limit_mb")
         return {k: getattr(self, k) for k in keys}
 
@@ -742,7 +744,17 @@ def beeg_streams(url: str) -> list:
         mm = re.search(r"(\d{3,4})", str(key))
         out.append((int(mm.group(1)) if mm else 0, f"https://video.beeg.com/{str(uri).lstrip('/')}"))
     out.sort(key=lambda t: -t[0])
-    LOG.info("beeg %s offers: %s", vid, [h for h, _ in out])
+    LOG.info("beeg %s offers: %s | keys: %s", vid, [h for h, _ in out], list(res.keys())[:12])
+    for h, addr in out[:6]:  # what each playlist really is (for the log)
+        try:
+            t = _quick_get(addr, "https://beeg.com/")
+            if "#EXT-X-STREAM-INF" in t:
+                hs = sorted({v for v in re.findall(r"RESOLUTION=\d+x(\d+)", t)}, key=int)
+                LOG.info("beeg %sp playlist: master, variants %s", h, hs)
+            else:
+                LOG.info("beeg %sp playlist: %d segments", h, t.count("#EXTINF"))
+        except Exception as ex:  # noqa: BLE001
+            LOG.info("beeg %sp playlist unreadable: %s", h, str(ex)[:100])
     return out
 
 
@@ -770,6 +782,7 @@ def run_download(item: Item, cfg: Config) -> None:
             if item.stop.is_set():
                 break
             reset()
+            item.route = f"beeg list {h}p (yt-dlp)"
             try:
                 _download_once(item, cfg, addr, "https://beeg.com/", True)
                 return
@@ -777,6 +790,7 @@ def run_download(item: Item, cfg: Config) -> None:
                 if item.stop.is_set():
                     raise
             reset()
+            item.route = f"beeg list {h}p (ffmpeg)"
             try:
                 _ffmpeg_copy(item, cfg, addr, "https://beeg.com/")
                 return
@@ -784,6 +798,7 @@ def run_download(item: Item, cfg: Config) -> None:
                 if item.stop.is_set():
                     raise
         reset()
+    item.route = "page (yt-dlp)"
     try:
         _download_once(item, cfg, url, item.referer, False)
         return
@@ -793,6 +808,7 @@ def run_download(item: Item, cfg: Config) -> None:
         first = ex
     if effective_cookie_file(cfg) or cfg.cookies_browser:
         reset()
+        item.route = "page (yt-dlp, no sign-in)"
         try:
             _download_once(item, cfg, url, item.referer, False, use_cookies=False)
             return
@@ -810,6 +826,7 @@ def run_download(item: Item, cfg: Config) -> None:
             if item.stop.is_set():
                 break
             reset()
+            item.route = "page reader"
             try:
                 _download_once(item, cfg, cand, url, True)
                 return
@@ -819,8 +836,10 @@ def run_download(item: Item, cfg: Config) -> None:
     if item.alt_url:
         ref = item.alt_referer or item.referer or item.url
         best = upgrade_stream(item.alt_url, ref, _quality_cap(item, cfg))  # the page's player may have been on a low quality
+        LOG.info("captured stream %s -> using %s", item.alt_url, best)
         for addr in dict.fromkeys([best, item.alt_url]):
             reset()
+            item.route = "captured stream" + (" (upgraded)" if addr != item.alt_url else "")
             try:
                 _download_once(item, cfg, addr, ref, True)
                 return
@@ -1306,6 +1325,24 @@ def _transient(err: str) -> bool:
     return bool(_TRANSIENT.search(err or "")) and not _PERMANENT.search(err or "")
 
 
+def probe_video(path: str) -> tuple:
+    """(width, height, kb/s, seconds) of a saved video, read with ffmpeg; zeros if unknown."""
+    ff = find_ffmpeg()
+    if not ff or not path or not os.path.isfile(path):
+        return (0, 0, 0, 0.0)
+    try:
+        r = subprocess.run([ff, "-hide_banner", "-i", path], capture_output=True, text=True, timeout=20,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        t = r.stderr
+        m = re.search(r"Video:.*?,\s*(\d{2,5})x(\d{2,5})", t, re.S)
+        b = re.search(r"bitrate:\s*(\d+)\s*kb/s", t)
+        d = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", t)
+        secs = int(d.group(1)) * 3600 + int(d.group(2)) * 60 + float(d.group(3)) if d else 0.0
+        return (int(m.group(1)) if m else 0, int(m.group(2)) if m else 0, int(b.group(1)) if b else 0, secs)
+    except Exception:  # noqa: BLE001
+        return (0, 0, 0, 0.0)
+
+
 def _worker(item: Item, cfg: Config) -> None:
     try:
         try:
@@ -1318,6 +1355,16 @@ def _worker(item: Item, cfg: Config) -> None:
         (run_live if item.kind == "live" else run_download)(item, cfg)
         item.status = "Completed"
         item.eta = None
+        if item.kind == "download" and item.path:
+            w, h, kbps, secs = probe_video(item.path)
+            if h:
+                item.info = f"{h}p"
+            try:
+                size_mb = os.path.getsize(item.path) / 1048576
+            except OSError:
+                size_mb = 0
+            LOG.info("saved %s | route=%s | %sx%s | %s kb/s | %.1f MB | %.0f s", item.url, item.route or "?",
+                     w, h, kbps, size_mb, secs)
     except Exception as e:  # noqa: BLE001
         if item.stop.is_set():
             if item.kind == "live" and item.done > 0:
