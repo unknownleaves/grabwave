@@ -1184,12 +1184,13 @@ def collection_kind(url: str) -> str:
             return "erome-profile"
     if host in ("redgifs.com", "www.redgifs.com") and len(parts) >= 2 and parts[0] == "users":
         return "redgifs-user"
-    if re.search(r"(^|\.)(?:xfree|bodgirls)\.com$", host) and any(
+    if re.search(r"(^|\.)(?:xfree|bodgirls|balbums)\.(?:com|st)$", host) and any(
             x.lower() in ("models", "model", "pornstars", "pornstar", "channels", "channel", "creators", "users",
-                          "profile", "profiles", "performers", "girls", "tags", "categories", "category")
+                          "profile", "profiles", "performers", "girls", "tags", "categories", "category", "album", "albums",
+                          "gallery", "galleries", "a", "u")
             for x in parts[:-1] if True) and len(parts) >= 2:
         return "listing:generic"
-    if len(parts) == 1 and re.search(r"(^|\.)(?:xfree|bodgirls)\.com$", host) and parts[0].lower() not in _VIDEO_WORDS \
+    if len(parts) == 1 and re.search(r"(^|\.)(?:xfree|bodgirls|balbums)\.(?:com|st)$", host) and parts[0].lower() not in _VIDEO_WORDS \
             and parts[0].lower() not in ("search", "tags", "categories", "login", "signup", "about", "terms", "privacy"):
         return "listing:generic"
     if len(parts) >= 2:
@@ -1197,7 +1198,7 @@ def collection_kind(url: str) -> str:
         if re.search(r"(^|\.)pornhub\.(com|org|net)$", host) and first in ("model", "pornstar", "users", "channels",
                                                                           "playlist"):
             return "listing:pornhub"
-        if re.search(r"(^|\.)(?:xfree|bodgirls)\.com$", host) and first not in _VIDEO_WORDS:
+        if re.search(r"(^|\.)(?:xfree|bodgirls|balbums)\.(?:com|st)$", host) and first not in _VIDEO_WORDS:
             return "listing:generic"
         if re.search(r"(^|\.)redtube\.(com|net)$", host) and first in ("users", "pornstar", "channels", "channel",
                                                                      "playlist", "playlists"):
@@ -1244,15 +1245,17 @@ def _html_unescape(t: str) -> str:
     return html.unescape(t or "").strip()
 
 
-def _erome_album(url: str) -> tuple[str, list]:
-    """(album title, [entry, ...]) for one erome album page, own page reader."""
-    h = _page_html(url, "https://www.erome.com/")
-    title = ""
+def _page_title(h: str) -> str:
     m = re.search(r"<h1[^>]*>(.*?)</h1>", h, re.S | re.I) or re.search(
         r'property=["\']og:title["\'][^>]*content=["\']([^"\']+)', h, re.I)
-    if m:
-        title = _html_unescape(re.sub(r"<[^>]+>", "", m.group(1)))
-        title = re.sub(r"\s*\|\s*EroMe.*$", "", title, flags=re.I)
+    if not m:
+        return ""
+    t = _html_unescape(re.sub(r"<[^>]+>", "", m.group(1)))
+    return re.sub(r"\s*\|\s*(EroMe|[A-Za-z0-9 ]+)$", "", t, flags=re.I).strip()
+
+
+def _page_videos(h: str, url: str) -> list:
+    """The direct video files a page plays: <video>/<source> tags (best quality each), else any .mp4 address."""
     out, seen = [], set()
     for vm in re.finditer(r"<video\b([^>]*)>(.*?)</video>", h, re.S | re.I):
         attrs, inner = vm.group(1), vm.group(2)
@@ -1282,7 +1285,15 @@ def _erome_album(url: str) -> tuple[str, list]:
             if u2 not in seen:
                 seen.add(u2)
                 out.append({"url": u2, "referer": url, "thumb": ""})
-    return title, out
+    return out
+
+
+
+
+def _erome_album(url: str) -> tuple[str, list]:
+    """(album title, [entry, ...]) for one album page, own page reader."""
+    h = _page_html(url, "https://www.erome.com/")
+    return _page_title(h), _page_videos(h, url)
 
 
 def _erome_profile_albums(url: str) -> tuple[str, list]:
@@ -1506,7 +1517,51 @@ def _next_link(html: str, page_url: str) -> str:
     return "" if nxt.split("#")[0].rstrip("/") == page_url.split("#")[0].rstrip("/") or nxt.lower().startswith("javascript") else nxt
 
 
+_DEEP_HOSTS = ("balbums.st", "balbums.com")
+
+
 def _generic_listing(url: str, cfg: Config) -> tuple[str, list]:
+    """Profile / model / album pages on sites without their own reader.
+    1. A page that plays videos itself (an album) -> those videos.
+    2. Otherwise the repeated thumbnail links over all pages (follows "Next", or tries page-number styles);
+       on album-style sites each linked page is opened and its videos are used."""
+    host = (urlparse(url).hostname or "").lower()
+    deep_site = any(host == h or host.endswith("." + h) for h in _DEEP_HOSTS)
+    if deep_site:
+        try:
+            first = _page_html(url, url)
+        except Exception:  # noqa: BLE001
+            first = ""
+        vids = _page_videos(first, url) if first else []
+        if vids:
+            title = _page_title(first)
+            for n, e in enumerate(vids, 1):
+                e["filename"] = _safe_name(f"{title} {n:02d}" if title and len(vids) > 1 else title)
+            return title, vids
+    title, ents = _generic_pages(url, cfg)
+    if ents and deep_site:
+        deep, tried = [], 0
+        for e in ents:
+            tried += 1
+            try:
+                h = _page_html(e["url"], url)
+                vids = _page_videos(h, e["url"])
+                t2 = _page_title(h)
+            except Exception:  # noqa: BLE001
+                vids, t2 = [], ""
+            if vids:
+                for n, v in enumerate(vids, 1):
+                    v["filename"] = _safe_name(f"{t2} {n:02d}" if t2 and len(vids) > 1 else t2)
+                deep += vids
+            else:
+                deep.append(e)
+            if len(deep) >= MAX_COLLECTION or tried >= 150:
+                break
+        return title, deep
+    return title, ents
+
+
+def _generic_pages(url: str, cfg: Config) -> tuple[str, list]:
     """All pages of a profile / model page: follow the page's own "next" link; if it has none, try the common
     page-number styles (?page=2, /page/2/, /2/, ?p=2) on page 2 and keep the first that brings new links."""
     base = url.split("#")[0]

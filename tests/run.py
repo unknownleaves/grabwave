@@ -58,6 +58,14 @@ E._page_html = api
 t, ents = E._redgifs_api("https://www.redgifs.com/users/bob", E.Config())
 check("redgifs api: both pages", len(ents) == 4 and ents[0]["alt_url"].endswith(".mp4"))
 
+# album-style sites: an album page plays its videos itself; a profile lists albums
+_alb = '<h1>Trip | Site</h1><video><source src="https://cdn/1.mp4" res="720"></video><video><source src="https://cdn/2.mp4"></video>'
+E._page_html = lambda url, referer="", headers=None: _alb if "/album/" in url else "".join(f'<a href="/album/a{i}"><img src="t.jpg"></a>' for i in range(4))
+t_, e_ = E.expand_collection("https://balbums.st/album/Z", E.Config())
+check("album page: its own videos", [x["url"] for x in e_] == ["https://cdn/1.mp4", "https://cdn/2.mp4"] and e_[0]["filename"] == "Trip 01")
+t_, e_ = E.expand_collection("https://balbums.st/someuser", E.Config())
+check("profile page: videos from each album", len(e_) == 2 and e_[0]["url"].startswith("https://cdn/"))
+
 # --- queue behaviour -----------------------------------------------------------------------
 cfg = E.Config(); cfg.download_dir = os.path.join(_tmp, "dl"); os.makedirs(cfg.download_dir, exist_ok=True)
 m = E.Manager(cfg); m.save = lambda: None

@@ -1,6 +1,7 @@
-Grabwave 2.24
+Grabwave 2.25
 
 New
+- More album and profile sites: pages that list albums are followed into each album, and every video in them is downloaded.
 - Albums, profiles, channels and playlists: paste one and Grabwave finds every video on it and downloads them all, each as its own item in a folder named after the page. Long pages are followed page by page, and in the Browse tab the download button scrolls the page to the end first.
 - Asks before adding a large batch, and skips videos that are already in your list or already saved.
 - Downloads from one site run a few at a time with a short gap, and a busy site gets an automatic second try after a few minutes.
