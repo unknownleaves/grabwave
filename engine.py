@@ -718,6 +718,34 @@ def _quality_cap(item, cfg) -> int:
     return int(q) if q.isdigit() else 0
 
 
+# ----------------------------------------------------------------------------
+# Beeg: the site lists a playlist for every resolution; read that list and take the highest
+# ----------------------------------------------------------------------------
+def beeg_streams(url: str) -> list:
+    """[(height, playlist address), ...] best first, from the site's own file list; [] if it isn't a Beeg video."""
+    import json as _json
+    m = re.search(r"beeg\.com/(?:video/)?-?(\d+)", url or "", re.I)
+    if not m:
+        return []
+    vid = m.group(1)
+    d = _json.loads(_page_html(f"https://store.externulls.com/facts/file/{vid}", "https://beeg.com/",
+                               {"Accept": "application/json", "Origin": "https://beeg.com"}, 15))
+    res = (d.get("file") or {}).get("hls_resources") or {}
+    if not res:  # older entries keep them on the first "fact"
+        facts = [f for f in (d.get("fc_facts") or []) if isinstance(f, dict)]
+        if facts:
+            res = (min(facts, key=lambda f: f.get("id") or 0).get("hls_resources")) or {}
+    out = []
+    for key, uri in res.items():
+        if not uri:
+            continue
+        mm = re.search(r"(\d{3,4})", str(key))
+        out.append((int(mm.group(1)) if mm else 0, f"https://video.beeg.com/{str(uri).lstrip('/')}"))
+    out.sort(key=lambda t: -t[0])
+    LOG.info("beeg %s offers: %s", vid, [h for h, _ in out])
+    return out
+
+
 def run_download(item: Item, cfg: Config) -> None:
     """Try the page/media URL with yt-dlp; then again without the browser cookies (stale sign-ins break some
     sites, e.g. X/Twitter); then the stream address the browser pane captured (item.alt_url)."""
@@ -728,6 +756,34 @@ def run_download(item: Item, cfg: Config) -> None:
 
     first = None
     url = _normalize_url(item.url)
+    if item.kind == "download" and "beeg." in url.lower():  # read the site's own list of resolutions first
+        try:
+            streams = beeg_streams(url)
+        except Exception as ex:  # noqa: BLE001
+            LOG.info("beeg list failed: %s", str(ex)[:200])
+            streams = []
+        if streams and getattr(beeg_streams, "title", "") and (not item.title or item.title == item.url):
+            item.title = beeg_streams.title
+        cap = _quality_cap(item, cfg)
+        pick = [t for t in streams if not cap or not t[0] or t[0] <= cap] or streams
+        for h, addr in pick[:3]:
+            if item.stop.is_set():
+                break
+            reset()
+            try:
+                _download_once(item, cfg, addr, "https://beeg.com/", True)
+                return
+            except Exception:  # noqa: BLE001
+                if item.stop.is_set():
+                    raise
+            reset()
+            try:
+                _ffmpeg_copy(item, cfg, addr, "https://beeg.com/")
+                return
+            except Exception:  # noqa: BLE001
+                if item.stop.is_set():
+                    raise
+        reset()
     try:
         _download_once(item, cfg, url, item.referer, False)
         return
@@ -2231,6 +2287,13 @@ def resolve_stream(url: str, cfg: Config, alt_url: str = "", alt_referer: str = 
     Routes, in order: live room resolver -> yt-dlp (with cookies) -> yt-dlp (other YouTube clients, no cookies)
     -> KVS page reader -> address the built-in browser saw."""
     errors = []
+    if "beeg." in url.lower():
+        try:
+            bs = [t for t in beeg_streams(url) if not t[0] or t[0] <= 1080]
+            if bs:
+                return {"inputs": [bs[0][1]], "headers": _watch_headers("https://beeg.com/"), "title": ""}
+        except Exception as ex:  # noqa: BLE001
+            errors.append(str(ex)[:200])
     if url.lower().startswith(("http://", "https://")):
         if cam_detect(url):
             try:

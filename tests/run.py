@@ -126,6 +126,15 @@ E._quick_get_head = lambda u, r="": _sz.get(u, 0)
 check("quality: direct file finds the larger one", E.upgrade_stream("https://c.com/v_480p.mp4") == "https://c.com/v_1080p.mp4")
 check("quality: nothing to find leaves it alone", E.upgrade_stream("https://c.com/abc.mp4") == "https://c.com/abc.mp4")
 
+# --- Beeg: the highest resolution from the site's own list
+_api = {"file": {"hls_resources": {"fl_cdn_240": "key=a/240", "fl_cdn_720": "key=a/720", "fl_cdn_1080": "key=a/1080", "fl_cdn_480": ""}}}
+E._page_html = lambda url, referer="", headers=None, timeout=25: json.dumps(_api)
+_bs = E.beeg_streams("https://beeg.com/-0123456789")
+check("beeg: highest first", [h for h, _ in _bs] == [1080, 720, 240] and _bs[0][1] == "https://video.beeg.com/key=a/1080", _bs)
+check("beeg: other site is not matched", E.beeg_streams("https://example.com/-123") == [])
+_api = {"file": {}, "fc_facts": [{"id": 9, "hls_resources": {"fl_cdn_480": "x/480"}}, {"id": 3, "hls_resources": {"fl_cdn_720": "x/720"}}]}
+check("beeg: falls back to the first fact", [h for h, _ in E.beeg_streams("https://beeg.com/video/55")] == [720])
+
 # --- VR math -------------------------------------------------------------------------------
 import vr
 check("vr: name hint", vr.detect_mode("scene_180_3dh_LR.mp4", 3840, 1920) == "180sbs")
