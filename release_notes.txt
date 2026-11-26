@@ -1,6 +1,7 @@
-Grabwave 2.29
+Grabwave 2.30
 
 Fixed
+- "bad local file header ... yt-dlp.zip" errors: the background update of the video engine no longer overwrites the copy the running app is using. Each update is saved as a new file, a damaged one is skipped, and if the loaded engine turns out to be damaged Grabwave reloads it and retries the download by itself.
 - The video player now opens every time. Before, after closing one player, the next video could start playing in the background with no window until Grabwave was restarted.
 
 New

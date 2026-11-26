@@ -135,6 +135,37 @@ check("beeg: other site is not matched", E.beeg_streams("https://example.com/-12
 _api = {"file": {}, "fc_facts": [{"id": 9, "hls_resources": {"fl_cdn_480": "x/480"}}, {"id": 3, "hls_resources": {"fl_cdn_720": "x/720"}}]}
 check("beeg: falls back to the first fact", [h for h, _ in E.beeg_streams("https://beeg.com/video/55")] == [720])
 
+# --- yt-dlp engine updates are separate files, a damaged one is skipped
+import zipfile, shutil, importlib
+def _mkzip(path, ver, broken=False):
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("yt_dlp/__init__.py", "")
+        z.writestr("yt_dlp/version.py", f"__version__ = '{ver}'\n")
+        z.writestr("yt_dlp/extractor/__init__.py", "")
+    if broken:
+        data = open(path, "rb").read(); open(path, "wb").write(data[:len(data) // 2] + b"\0" * 40)
+ed = E._engine_dir()
+for f in ed.glob("*"): f.unlink()
+_mkzip(ed / "yt-dlp-2026.01.01.000000.zip", "2026.01.01.000000")
+_mkzip(ed / "yt-dlp-2026.11.22.232654.zip", "2026.11.22.232654")
+_mkzip(ed / "yt-dlp.zip", "2025.01.01.000000")
+check("engine: newest package first", [p.name for p in E.ytdlp_zips()][0] == "yt-dlp-2026.11.22.232654.zip")
+sys.modules.pop("yt_dlp", None)
+try:
+    got = E.activate_ytdlp_update()
+    check("engine: newest valid package is used", got == "2026.11.22.232654", got)
+    check("engine: older packages are cleaned up", [p.name for p in E.ytdlp_zips()] == ["yt-dlp-2026.11.22.232654.zip"], [p.name for p in E.ytdlp_zips()])
+    # a damaged newest package is set aside and the next one used
+    E._drop_updfinder(); E._ACTIVE_ZIP = None
+    _mkzip(ed / "yt-dlp-2026.12.01.000000.zip", "2026.12.01.000000", broken=True)
+    got = E.activate_ytdlp_update()
+    check("engine: damaged package is skipped", got == "2026.11.22.232654", got)
+    check("engine: damage is recognised", E._engine_damaged(RuntimeError("bad local file header: 'x.zip'")))
+    check("engine: ordinary errors are not", not E._engine_damaged(RuntimeError("HTTP Error 404")))
+finally:
+    E._drop_updfinder()
+    for f in ed.glob("*"): f.unlink()
+
 # --- VR math -------------------------------------------------------------------------------
 import vr
 check("vr: name hint", vr.detect_mode("scene_180_3dh_LR.mp4", 3840, 1920) == "180sbs")

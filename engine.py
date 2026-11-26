@@ -139,10 +139,46 @@ YTDLP_URLS = {
 }
 
 
-def ytdlp_zip() -> Path:
+_ACTIVE_ZIP: Path | None = None  # the update file this run imports yt-dlp from; never replaced or deleted while in use
+
+
+def _engine_dir() -> Path:
     d = config_dir() / "engine"
     d.mkdir(parents=True, exist_ok=True)
-    return d / "yt-dlp.zip"
+    return d
+
+
+def _zip_rank(p: Path) -> tuple:
+    nums = re.findall(r"\d+", p.stem.replace("yt-dlp", ""))
+    return tuple(int(x) for x in nums) if nums else (0,)
+
+
+def ytdlp_zips() -> list:
+    """Downloaded yt-dlp packages, newest first. Each update is a new file (yt-dlp-<version>.zip), so a file that
+    the running app is importing from is never overwritten."""
+    d = _engine_dir()
+    return sorted([p for p in d.glob("yt-dlp*.zip") if p.is_file()], key=_zip_rank, reverse=True)
+
+
+def ytdlp_zip() -> Path:
+    z = ytdlp_zips()
+    return z[0] if z else _engine_dir() / "yt-dlp.zip"
+
+
+def _prune_ytdlp_zips(keep: Path | None = None) -> None:
+    """Remove older downloaded packages (not the newest, not the one in use). Failures are fine."""
+    z = ytdlp_zips()
+    for p in z[1:]:
+        if p != _ACTIVE_ZIP and p != keep:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    for p in _engine_dir().glob("*.bad"):
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 class _UpdFinder:
@@ -164,25 +200,43 @@ def _drop_updfinder() -> None:
 
 
 def activate_ytdlp_update() -> str:
-    """Call once at startup, before anything imports yt_dlp. Returns the updated version, or '' if none is used."""
-    zp = ytdlp_zip()
-    if not zp.is_file() or "yt_dlp" in sys.modules:
+    """Call at startup, before anything imports yt_dlp. Returns the updated version, or '' if none is used.
+    Tries the newest downloaded package, then older ones; a package that fails to load is set aside."""
+    global _ACTIVE_ZIP
+    if "yt_dlp" in sys.modules:
         return ""
-    try:
-        import zipimport
-        sys.meta_path.insert(0, _UpdFinder(zipimport.zipimporter(str(zp))))
-        import yt_dlp
-        if str(zp) not in (getattr(yt_dlp, "__file__", "") or ""):
-            raise ImportError("update not used")
-        from yt_dlp.version import __version__
-        return __version__
-    except Exception:
-        _drop_updfinder()  # fall back to the bundled copy
+    for zp in ytdlp_zips():
         try:
-            zp.replace(zp.with_suffix(".bad"))
-        except OSError:
-            pass
-        return ""
+            import zipimport
+            sys.meta_path.insert(0, _UpdFinder(zipimport.zipimporter(str(zp))))
+            import yt_dlp
+            if str(zp) not in (getattr(yt_dlp, "__file__", "") or ""):
+                raise ImportError("update not used")
+            from yt_dlp.version import __version__
+            import yt_dlp.extractor  # noqa: F401  (loads the site list now, while the file is known to be sound)
+            _ACTIVE_ZIP = zp
+            _prune_ytdlp_zips()
+            return __version__
+        except Exception as ex:  # noqa: BLE001
+            _drop_updfinder()  # fall back to the next package, then the copy bundled in the app
+            try:
+                LOG.info("engine update %s not used: %s", zp.name, str(ex)[:150])
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                zp.replace(zp.with_suffix(".bad"))
+            except OSError:
+                pass
+    return ""
+
+
+def reload_ytdlp() -> str:
+    """Throw away the loaded yt-dlp and load it again (newest package, or the bundled copy). Used when the
+    loaded copy turns out to be damaged."""
+    global _ACTIVE_ZIP
+    _ACTIVE_ZIP = None
+    _drop_updfinder()
+    return activate_ytdlp_update()
 
 
 def ytdlp_version() -> str:
@@ -211,7 +265,7 @@ def update_ytdlp(channel: str = "nightly", proxy: str = "") -> str:
     if proxy:
         handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
     opener = urllib.request.build_opener(*handlers)
-    tmp = ytdlp_zip().with_suffix(".download")
+    tmp = _engine_dir() / "yt-dlp.download"
     req = urllib.request.Request(url, headers={"User-Agent": "Grabwave"})
     with opener.open(req, timeout=60) as r, open(tmp, "wb") as f:
         shutil.copyfileobj(r, f)
@@ -219,11 +273,20 @@ def update_ytdlp(channel: str = "nightly", proxy: str = "") -> str:
         if tmp.stat().st_size < 500_000 or not zipfile.is_zipfile(tmp):
             raise RuntimeError("The downloaded file is not a valid yt-dlp package.")
         with zipfile.ZipFile(tmp) as z:
+            bad = z.testzip()  # every file inside must read back correctly
+            if bad:
+                raise RuntimeError(f"The downloaded yt-dlp package is damaged ({bad}).")
             m = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", z.read("yt_dlp/version.py").decode("utf-8", "replace"))
-        os.replace(tmp, ytdlp_zip())
+        ver = m.group(1) if m else ""
+        if not ver:
+            raise RuntimeError("The downloaded file does not say which yt-dlp version it is.")
+        dest = _engine_dir() / f"yt-dlp-{ver}.zip"
+        if not dest.exists():
+            os.replace(tmp, dest)  # a NEW file: the one the running app imports from stays untouched
+        _prune_ytdlp_zips(keep=dest)
     finally:
         tmp.unlink(missing_ok=True)
-    return m.group(1) if m else "?"
+    return ver
 
 
 def find_ffmpeg() -> str | None:
@@ -1343,6 +1406,12 @@ def probe_video(path: str) -> tuple:
         return (0, 0, 0, 0.0)
 
 
+def _engine_damaged(ex: Exception) -> bool:
+    t = f"{type(ex).__name__} {ex}"
+    return bool(re.search(r"bad local file header|BadZipFile|zipimport|No module named .?yt_dlp|"
+                          r"cannot import name .* from .?yt_dlp", t, re.I))
+
+
 def _worker(item: Item, cfg: Config) -> None:
     try:
         try:
@@ -1352,7 +1421,15 @@ def _worker(item: Item, cfg: Config) -> None:
         fix_urllib3()
         if item.kind == "download" and cam_detect(item.url):
             item.kind = "live"  # a cam-room link is always a live room: record it
-        (run_live if item.kind == "live" else run_download)(item, cfg)
+        try:
+            (run_live if item.kind == "live" else run_download)(item, cfg)
+        except Exception as e0:  # noqa: BLE001
+            if _engine_damaged(e0) and not item.stop.is_set():
+                LOG.warning("video engine looks damaged (%s); reloading it", str(e0)[:150])
+                reload_ytdlp()
+                (run_live if item.kind == "live" else run_download)(item, cfg)
+            else:
+                raise
         item.status = "Completed"
         item.eta = None
         if item.kind == "download" and item.path:
