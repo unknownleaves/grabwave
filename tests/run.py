@@ -150,7 +150,8 @@ _mkzip(ed / "yt-dlp-2026.01.01.000000.zip", "2026.01.01.000000")
 _mkzip(ed / "yt-dlp-2026.11.22.232654.zip", "2026.11.22.232654")
 _mkzip(ed / "yt-dlp.zip", "2025.01.01.000000")
 check("engine: newest package first", [p.name for p in E.ytdlp_zips()][0] == "yt-dlp-2026.11.22.232654.zip")
-sys.modules.pop("yt_dlp", None)
+E._drop_updfinder()  # forget any yt-dlp that is already loaded (the build machine has the real one)
+E._ACTIVE_ZIP = None
 try:
     got = E.activate_ytdlp_update()
     check("engine: newest valid package is used", got == "2026.11.22.232654", got)
